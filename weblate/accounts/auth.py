@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -32,8 +32,8 @@ def try_get_user(username, list_all=False):
     else:
         method = User.objects.get
     if "@" in username:
-        return method(email__iexact=username)
-    return method(username__iexact=username)
+        return method(email=username)
+    return method(username=username)
 
 
 class WeblateUserBackend(ModelBackend):

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -39,7 +39,8 @@ class MicrosoftCognitiveTranslation(MachineTranslation):
         "zh-hans": "zh-Hans",
         "zh-tw": "zh-Hant",
         "zh-cn": "zh-Hans",
-        "tlh-qaak": "tlh-Qaak",
+        "tlh": "tlh-Latn",
+        "tlh-qaak": "tlh-Piqd",
         "nb": "no",
         "bs-latn": "bs-Latn",
         "sr-latn": "sr-Latn",
@@ -56,7 +57,7 @@ class MicrosoftCognitiveTranslation(MachineTranslation):
         if settings.MT_MICROSOFT_REGION is None:
             region = ""
         else:
-            region = "{}.".format(settings.MT_MICROSOFT_REGION)
+            region = f"{settings.MT_MICROSOFT_REGION}."
 
         self._cognitive_token_url = TOKEN_URL.format(
             region,
@@ -69,7 +70,7 @@ class MicrosoftCognitiveTranslation(MachineTranslation):
 
     @staticmethod
     def get_url(suffix):
-        return "https://{}/{}".format(settings.MT_MICROSOFT_BASE_URL, suffix)
+        return f"https://{settings.MT_MICROSOFT_BASE_URL}/{suffix}"
 
     def is_token_expired(self):
         """Check whether token is about to expire."""
@@ -77,7 +78,7 @@ class MicrosoftCognitiveTranslation(MachineTranslation):
 
     def get_authentication(self):
         """Hook for backends to allow add authentication headers to request."""
-        return {"Authorization": "Bearer {0}".format(self.access_token)}
+        return {"Authorization": f"Bearer {self.access_token}"}
 
     @property
     def access_token(self):
@@ -119,7 +120,16 @@ class MicrosoftCognitiveTranslation(MachineTranslation):
 
         return payload["translation"].keys()
 
-    def download_translations(self, source, language, text, unit, user, search):
+    def download_translations(
+        self,
+        source,
+        language,
+        text: str,
+        unit,
+        user,
+        search: bool,
+        threshold: int = 75,
+    ):
         """Download list of possible translations from a service."""
         args = {
             "api-version": "3.0",

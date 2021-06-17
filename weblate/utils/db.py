@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -18,12 +18,18 @@
 #
 """Database specific code to extend Django."""
 
-from django.db import models, router
+from django.db import connection, models, router
 from django.db.models import Case, IntegerField, Sum, When
 from django.db.models.deletion import Collector
 from django.db.models.lookups import PatternLookup
 
 ESCAPED = frozenset(".\\+*?[^]$(){}=!<>|:-")
+
+PG_TRGM = "CREATE INDEX {0}_{1}_fulltext ON trans_{0} USING GIN ({1} gin_trgm_ops)"
+PG_DROP = "DROP INDEX {0}_{1}_fulltext"
+
+MY_FTX = "CREATE FULLTEXT INDEX {0}_{1}_fulltext ON trans_{0}({1})"
+MY_DROP = "ALTER TABLE trans_{0} DROP INDEX {0}_{1}_fulltext"
 
 
 def conditional_sum(value=1, **cond):
@@ -31,14 +37,40 @@ def conditional_sum(value=1, **cond):
     return Sum(Case(When(then=value, **cond), default=0, output_field=IntegerField()))
 
 
+def using_postgresql():
+    return connection.vendor == "postgresql"
+
+
+def adjust_similarity_threshold(value: float):
+    """
+    Adjusts pg_trgm.similarity_threshold for the % operator.
+
+    Ideally we would use directly similarity() in the search, but that doesn't seem
+    to use index, while using % does.
+    """
+    if not using_postgresql():
+        return
+    with connection.cursor() as cursor:
+        # The SELECT has to be executed first as othervise the trgm extension
+        # might not yet be loaded and GUC setting not possible.
+        if not hasattr(connection, "weblate_similarity"):
+            cursor.execute("SELECT show_limit()")
+            connection.weblate_similarity = cursor.fetchone()[0]
+        # Change setting only for reasonably big difference
+        if abs(connection.weblate_similarity - value) > 0.01:
+            cursor.execute("SELECT set_limit(%s)", [value])
+            connection.weblate_similarity = value
+
+
 class PostgreSQLSearchLookup(PatternLookup):
     lookup_name = "search"
+    param_pattern = "%s"
 
     def as_sql(self, qn, connection):
         lhs, lhs_params = self.process_lhs(qn, connection)
         rhs, rhs_params = self.process_rhs(qn, connection)
         params = lhs_params + rhs_params
-        return "%s %%%% %s = true" % (lhs, rhs), params
+        return f"{lhs} %% {rhs} = true", params
 
 
 class MySQLSearchLookup(models.Lookup):
@@ -48,7 +80,7 @@ class MySQLSearchLookup(models.Lookup):
         lhs, lhs_params = self.process_lhs(compiler, connection)
         rhs, rhs_params = self.process_rhs(compiler, connection)
         params = lhs_params + rhs_params
-        return "MATCH (%s) AGAINST (%s IN NATURAL LANGUAGE MODE)" % (lhs, rhs), params
+        return f"MATCH ({lhs}) AGAINST ({rhs} IN NATURAL LANGUAGE MODE)", params
 
 
 class MySQLSubstringLookup(MySQLSearchLookup):
@@ -69,7 +101,7 @@ class PostgreSQLSubstringLookup(PatternLookup):
         lhs, lhs_params = self.process_lhs(compiler, connection)
         rhs, rhs_params = self.process_rhs(compiler, connection)
         params = lhs_params + rhs_params
-        return "%s ILIKE %s" % (lhs, rhs), params
+        return f"{lhs} ILIKE {rhs}", params
 
 
 def table_has_row(connection, table, rowname):
@@ -102,21 +134,96 @@ class FastCollector(Collector):
     """
     Fast delete collector skipping some signals.
 
-    It allows fast deletion for models flagged with weblate_unsafe_delete.
+    It allows fast deletion for some models.
 
     This is needed as check removal triggers check run and that can
     create new checks for just removed units.
     """
 
-    def can_fast_delete(self, objs, from_field=None):
-        if hasattr(objs, "model") and getattr(
-            objs.model, "weblate_unsafe_delete", False
+    @staticmethod
+    def do_weblate_fast_delete(model):
+        from weblate.checks.models import Check
+        from weblate.trans.models import Change, Comment, Suggestion, Unit, Vote
+
+        if (
+            model is Check
+            or model is Change
+            or model is Suggestion
+            or model is Vote
+            or model is Comment
         ):
+            return True
+        # MySQL fails to remove self-referencing source units
+        if model is Unit and using_postgresql():
+            return True
+        return False
+
+    def can_fast_delete(self, objs, from_field=None):
+        if hasattr(objs, "model") and self.do_weblate_fast_delete(objs.model):
             return True
         return super().can_fast_delete(objs, from_field)
 
+    def delete(self):
+        from weblate.checks.models import Check
+        from weblate.screenshots.models import Screenshot
+        from weblate.trans.models import (
+            Change,
+            Comment,
+            Suggestion,
+            Unit,
+            Variant,
+            Vote,
+        )
 
-class FastDeleteMixin:
+        fast_deletes = []
+        for item in self.fast_deletes:
+            if item.model is Suggestion:
+                fast_deletes.append(Vote.objects.filter(suggestion__in=item))
+                fast_deletes.append(Change.objects.filter(suggestion__in=item))
+            elif item.model is Unit:
+                fast_deletes.append(Change.objects.filter(unit__in=item))
+                fast_deletes.append(Check.objects.filter(unit__in=item))
+                fast_deletes.append(Vote.objects.filter(suggestion__unit__in=item))
+                fast_deletes.append(Suggestion.objects.filter(unit__in=item))
+                fast_deletes.append(Comment.objects.filter(unit__in=item))
+                fast_deletes.append(Change.objects.filter(suggestion__unit__in=item))
+                fast_deletes.append(Change.objects.filter(unit__source_unit__in=item))
+                fast_deletes.append(Check.objects.filter(unit__source_unit__in=item))
+                fast_deletes.append(
+                    Vote.objects.filter(suggestion__unit__source_unit__in=item)
+                )
+                fast_deletes.append(
+                    Suggestion.objects.filter(unit__source_unit__in=item)
+                )
+                fast_deletes.append(Comment.objects.filter(unit__source_unit__in=item))
+                fast_deletes.append(
+                    Change.objects.filter(suggestion__unit__source_unit__in=item)
+                )
+                fast_deletes.append(
+                    Variant.defining_units.through.objects.filter(unit__in=item)
+                )
+                fast_deletes.append(
+                    Variant.defining_units.through.objects.filter(
+                        unit__source_unit__in=item
+                    )
+                )
+                fast_deletes.append(
+                    Screenshot.units.through.objects.filter(unit__in=item)
+                )
+                fast_deletes.append(
+                    Screenshot.units.through.objects.filter(unit__source_unit__in=item)
+                )
+                fast_deletes.append(Unit.labels.through.objects.filter(unit__in=item))
+                fast_deletes.append(
+                    Unit.labels.through.objects.filter(unit__source_unit__in=item)
+                )
+                fast_deletes.append(Unit.objects.filter(source_unit__in=item))
+            fast_deletes.append(item)
+        self.fast_deletes = fast_deletes
+        return super().delete()
+
+
+class FastDeleteModelMixin:
     """Model mixin to use FastCollector."""
 
     def delete(self, using=None, keep_parents=False):
@@ -125,3 +232,38 @@ class FastDeleteMixin:
         collector = FastCollector(using=using)
         collector.collect([self], keep_parents=keep_parents)
         return collector.delete()
+
+
+class FastDeleteQuerySetMixin:
+    """QuerySet mixin to use FastCollector."""
+
+    def delete(self):
+        """
+        Delete the records in the current QuerySet.
+
+        Copied from Django, the only difference is using custom collector.
+        """
+        assert not self.query.is_sliced, "Cannot use 'limit' or 'offset' with delete."
+
+        if self._fields is not None:
+            raise TypeError("Cannot call delete() after .values() or .values_list()")
+
+        del_query = self._chain()
+
+        # The delete is actually 2 queries - one to find related objects,
+        # and one to delete. Make sure that the discovery of related
+        # objects is performed on the same database as the deletion.
+        del_query._for_write = True
+
+        # Disable non-supported fields.
+        del_query.query.select_for_update = False
+        del_query.query.select_related = False
+        del_query.query.clear_ordering(force_empty=True)
+
+        collector = FastCollector(using=del_query.db)
+        collector.collect(del_query)
+        deleted, _rows_count = collector.delete()
+
+        # Clear the result cache, in case this QuerySet gets reused.
+        self._result_cache = None
+        return deleted, _rows_count

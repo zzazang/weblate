@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -27,6 +27,20 @@ from weblate.auth.data import (
     ROLES,
     SELECTION_ALL,
 )
+
+
+def is_django_permission(permission: str):
+    """
+    Checks whether permission looks like a Django one.
+
+    Django permissions are <app>.<action>_<model>, while
+    Weblate ones are <scope>.<action> where action lacks underscores
+    with single exception of "add_more".
+    """
+    parts = permission.split(".", 1)
+    if len(parts) != 2:
+        return False
+    return "_" in parts[1] and parts[1] != "add_more"
 
 
 def migrate_permissions_list(model, permissions):
@@ -95,10 +109,9 @@ def create_anonymous(model, group_model, update=True):
     )
     if user.is_active:
         raise ValueError(
-            "Anonymous user ({}) already exists and enabled, "
-            "please change ANONYMOUS_USER_NAME setting.".format(
-                settings.ANONYMOUS_USER_NAME
-            )
+            f"Anonymous user ({settings.ANONYMOUS_USER_NAME}) already exists and is "
+            "active, please change the ANONYMOUS_USER_NAME setting or mark the user "
+            "as not active in the admin interface."
         )
 
     if created or update:

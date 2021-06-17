@@ -33,7 +33,6 @@
     <ul class="dropdown-menu">
     <li><a href="{% url 'changes' %}">{% trans "History" %}</a></li>
     <li><a href="{% url 'changes' %}?action=51&amp;action=50">{% trans "Recent additions" %}</a></li>
-    <li><a href="#activity" data-toggle="tab" data-load="activity" data-yearly="{% url 'yearly_activity' %}" data-monthly="{% url 'monthly_activity' %}">{% trans "Activity" %}</a></li>
     <li><a href="{% url 'stats' %}">{% trans "Statistics" %}</a></li>
     {% if user.is_authenticated %}
     <li><a href="#reports" data-toggle="tab">{% trans "Translation reports" %}</a></li>
@@ -50,7 +49,7 @@
     {% if usersubscriptions %}
         {% include "snippets/list-objects.html" with objects=usersubscriptions label=_("Component") hide_completed=user.profile.hide_completed name_source="translation" %}
 
-        {% include "paginator.html" with page_obj=usersubscriptions anchor='your-subscriptions' %}
+        {% include "paginator.html" with page_obj=usersubscriptions %}
     {% else %}
         {% include "list-projects.html" with projects=watched_projects %}
     {% endif %}
@@ -89,8 +88,6 @@
 </form>
 
 </div>
-
-{% include "activity-tab.html" %}
 
 {% if user.is_authenticated %}
 <div class="tab-pane" id="reports">

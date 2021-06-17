@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -28,6 +28,7 @@ from django.conf import settings
 from weblate.trans.util import get_clean_env
 from weblate.utils.data import data_dir
 from weblate.utils.errors import report_error
+from weblate.utils.lock import WeblateLock
 from weblate.vcs.ssh import SSH_WRAPPER, add_host_key
 
 CACHEDIR = """Signature: 8a477f597d28d172789f06886806bc55
@@ -35,6 +36,20 @@ CACHEDIR = """Signature: 8a477f597d28d172789f06886806bc55
 # For information about cache directory tags, see:
 #	https://bford.info/cachedir/spec.html
 """
+
+
+def ensure_backup_dir():
+    backup_dir = data_dir("backups")
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+    return backup_dir
+
+
+def backup_lock():
+    backup_dir = ensure_backup_dir()
+    return WeblateLock(
+        backup_dir, "backuplock", 0, "", "lock:{scope}", ".{scope}", timeout=120
+    )
 
 
 class BackupError(Exception):
@@ -70,19 +85,21 @@ def tag_cache_dirs():
 
 def borg(cmd, env=None):
     """Wrapper to execute borgbackup."""
-    SSH_WRAPPER.create()
-    try:
-        return subprocess.check_output(
-            ["borg", "--rsh", SSH_WRAPPER.filename] + cmd,
-            stderr=subprocess.STDOUT,
-            env=get_clean_env(env),
-        ).decode()
-    except EnvironmentError as error:
-        report_error()
-        raise BackupError("Could not execute borg program: {}".format(error))
-    except subprocess.CalledProcessError as error:
-        report_error(extra_data={"stdout": error.stdout.decode()})
-        raise BackupError(error.stdout.decode())
+    with backup_lock():
+        SSH_WRAPPER.create()
+        try:
+            return subprocess.check_output(
+                ["borg", "--rsh", SSH_WRAPPER.filename] + cmd,
+                stderr=subprocess.STDOUT,
+                env=get_clean_env(env),
+                universal_newlines=True,
+            )
+        except OSError as error:
+            report_error()
+            raise BackupError(f"Could not execute borg program: {error}")
+        except subprocess.CalledProcessError as error:
+            report_error(extra_data={"stdout": error.stdout})
+            raise BackupError(error.stdout)
 
 
 def initialize(location, passphrase):
@@ -117,7 +134,7 @@ def backup(location, passphrase):
             "*/.config/borg",
             "--compression",
             "auto,zstd",
-            "{}::{{now}}".format(location),
+            f"{location}::{{now}}",
             settings.DATA_DIR,
         ],
         {"BORG_PASSPHRASE": passphrase},
@@ -131,9 +148,9 @@ def prune(location, passphrase):
             "prune",
             "--list",
             "--keep-daily",
-            "7",
+            "14",
             "--keep-weekly",
-            "4",
+            "8",
             "--keep-monthly",
             "6",
             location,

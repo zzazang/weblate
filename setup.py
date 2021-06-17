@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -19,9 +19,20 @@
 #
 
 import os
+from distutils import log
+from distutils.command.build import build
+from distutils.core import Command
+from distutils.dep_util import newer
+from glob import glob
+from itertools import chain
 
 from setuptools import find_packages, setup
 from setuptools.command.build_py import build_py
+from translate.tools.pocompile import convertmo
+
+LOCALE_MASKS = [
+    "weblate/locale/*/LC_MESSAGES/*.po",
+]
 
 # allow setup.py to be run from any path
 os.chdir(os.path.normpath(os.path.join(os.path.abspath(__file__), os.pardir)))
@@ -32,7 +43,7 @@ with open("README.rst") as readme:
 with open("requirements.txt") as requirements:
     REQUIRES = requirements.read().splitlines()
 
-EXTRAS = {}
+EXTRAS = {"all": []}
 with open("requirements-optional.txt") as requirements:
     section = None
     for line in requirements:
@@ -42,7 +53,10 @@ with open("requirements-optional.txt") as requirements:
         if line.startswith("#"):
             section = line[2:]
         else:
-            EXTRAS[section] = line.split(";")[0].strip()
+            dep = line.split(";")[0].strip()
+            EXTRAS[section] = dep
+            if section != "MySQL":
+                EXTRAS["all"].append(dep)
 
 
 class WeblateBuildPy(build_py):
@@ -52,9 +66,36 @@ class WeblateBuildPy(build_py):
         return [item for item in result if item[2] != "weblate/settings.py"]
 
 
+class BuildMo(Command):
+    description = "update MO files to match PO"
+    user_options = []
+
+    def initialize_options(self):
+        self.build_base = None
+
+    def finalize_options(self):
+        self.set_undefined_options("build", ("build_base", "build_base"))
+
+    def run(self):
+        for name in chain.from_iterable(glob(mask) for mask in LOCALE_MASKS):
+            output = os.path.splitext(name)[0] + ".mo"
+            if not newer(name, output):
+                continue
+            self.announce(f"compiling {name} -> {output}", level=log.INFO)
+            with open(name, "rb") as pofile, open(output, "wb") as mofile:
+                convertmo(pofile, mofile, None)
+
+
+class WeblateBuild(build):
+    """Override the default build with new subcommands."""
+
+    # The build_mo has to be before build_data
+    sub_commands = [("build_mo", lambda self: True)] + build.sub_commands
+
+
 setup(
     name="Weblate",
-    version="4.1",
+    version="4.7.1",
     python_requires=">=3.6",
     packages=find_packages(),
     include_package_data=True,
@@ -92,11 +133,12 @@ setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
         "Topic :: Software Development :: Internationalization",
         "Topic :: Software Development :: Localization",
         "Topic :: Internet :: WWW/HTTP",
         "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
     ],
     entry_points={"console_scripts": ["weblate = weblate.runner:main"]},
-    cmdclass={"build_py": WeblateBuildPy},
+    cmdclass={"build_py": WeblateBuildPy, "build_mo": BuildMo, "build": WeblateBuild},
 )

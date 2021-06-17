@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,12 +20,11 @@
 from django.db.models import Count
 from django.http import Http404
 from django.shortcuts import get_object_or_404, render
-from django.utils.encoding import force_str
 from django.utils.http import urlencode
 from django.utils.translation import gettext as _
 
 from weblate.checks.models import CHECKS, Check
-from weblate.trans.models import Component, Translation
+from weblate.trans.models import Component, Translation, Unit
 from weblate.trans.util import redirect_param
 from weblate.utils.db import conditional_sum
 from weblate.utils.forms import FilterForm
@@ -35,7 +34,7 @@ from weblate.utils.views import get_component, get_project
 
 def encode_optional(params):
     if params:
-        return "?{0}".format(urlencode(params))
+        return f"?{urlencode(params)}"
     return ""
 
 
@@ -44,9 +43,7 @@ def show_checks(request):
     url_params = {}
     user = request.user
 
-    kwargs = {
-        "unit__translation__component__project_id__in": user.allowed_project_ids,
-    }
+    kwargs = {}
 
     form = FilterForm(request.GET)
     if form.is_valid():
@@ -68,6 +65,7 @@ def show_checks(request):
 
     allchecks = (
         Check.objects.filter(**kwargs)
+        .filter_access(user)
         .values("check")
         .annotate(
             check_count=Count("id"),
@@ -171,7 +169,8 @@ def show_check_project(request, name, project):
             url_params["lang"] = form.cleaned_data["lang"]
 
     components = (
-        Component.objects.filter(**kwargs)
+        Component.objects.filter_access(request.user)
+        .filter(**kwargs)
         .annotate(
             check_count=Count("translation__unit__check"),
             dismissed_check_count=conditional_sum(
@@ -194,7 +193,7 @@ def show_check_project(request, name, project):
         "check_project.html",
         {
             "components": components,
-            "title": "{0}/{1}".format(force_str(prj), check.name),
+            "title": f"{prj}/{check.name}",
             "check": check,
             "project": prj,
             "url_params": encode_optional(url_params),
@@ -236,17 +235,20 @@ def show_check_component(request, name, project, component):
         "check_component.html",
         {
             "translations": translations,
-            "title": "{0}/{1}".format(force_str(component), check.name),
+            "title": f"{component}/{check.name}",
             "check": check,
             "component": component,
         },
     )
 
 
-def render_check(request, check_id):
+def render_check(request, unit_id, check_id):
     """Render endpoint for checks."""
-    obj = get_object_or_404(Check, pk=int(check_id))
-    project = obj.unit.translation.component.project
-    request.user.check_access(project)
+    try:
+        obj = Check.objects.get(unit_id=unit_id, check=check_id)
+    except Check.DoesNotExist:
+        unit = get_object_or_404(Unit, pk=int(unit_id))
+        obj = Check(unit=unit, dismissed=False, check=check_id)
+    request.user.check_access_component(obj.unit.translation.component)
 
     return obj.check_obj.render(request, obj.unit)

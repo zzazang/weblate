@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -42,9 +42,9 @@ class LegalTest(TestCase, RegistrationTestMixin):
         response = self.client.get(reverse("legal:cookies"))
         self.assertContains(response, "Cookies Policy")
 
-    def test_security(self):
-        response = self.client.get(reverse("legal:security"))
-        self.assertContains(response, "Security Policy")
+    def test_contracts(self):
+        response = self.client.get(reverse("legal:contracts"))
+        self.assertContains(response, "Subcontractors")
 
     @modify_settings(
         SOCIAL_AUTH_PIPELINE={"append": "weblate.legal.pipeline.tos_confirm"}
@@ -93,7 +93,7 @@ class LegalTest(TestCase, RegistrationTestMixin):
         )
         # Check that contact works even without TOS
         response = self.client.get(reverse("contact"), follow=True)
-        self.assertContains(response, "You can contact maintainers")
+        self.assertContains(response, "You can only contact administrators")
         # Confirm current TOS
         request = HttpRequest()
         request.META["REMOTE_ADDR"] = "127.0.0.1"

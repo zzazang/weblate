@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,6 +20,7 @@
 
 
 import os
+from functools import lru_cache
 from io import BytesIO
 from tempfile import NamedTemporaryFile
 
@@ -113,6 +114,7 @@ def get_font_weight(weight):
     return FONT_WEIGHTS[weight]
 
 
+@lru_cache(maxsize=512)
 def render_size(font, weight, size, spacing, text, width=1000, lines=1, cache_key=None):
     """Check whether rendered text fits."""
     configure_fontconfig()
@@ -131,9 +133,7 @@ def render_size(font, weight, size, spacing, text, width=1000, lines=1, cache_ke
 
     # This seems to be only way to set letter spacing
     # See https://stackoverflow.com/q/55533312/225718
-    layout.set_markup(
-        '<span letter_spacing="{}">{}</span>'.format(spacing, escape(text))
-    )
+    layout.set_markup(f'<span letter_spacing="{spacing}">{escape(text)}</span>')
 
     # Set width and line wrapping
     layout.set_width(width * Pango.SCALE)
@@ -149,13 +149,26 @@ def render_size(font, weight, size, spacing, text, width=1000, lines=1, cache_ke
     # Render box around desired size
     expected_height = lines * pixel_size.height / line_count
     context.new_path()
-    context.set_source_rgb(246, 102, 76)
-    context.set_source_rgb(246.0 / 255, 102.0 / 255, 76.0 / 255)
+    context.set_source_rgb(0.8, 0.8, 0.8)
     context.set_line_width(1)
     context.move_to(1, 1)
     context.line_to(width, 1)
     context.line_to(width, expected_height)
     context.line_to(1, expected_height)
+    context.line_to(1, 1)
+    context.stroke()
+
+    # Render box about actual size
+    context.new_path()
+    if pixel_size.width > width or line_count > lines:
+        context.set_source_rgb(246 / 255, 102 / 255, 76 / 255)
+    else:
+        context.set_source_rgb(0.4, 0.4, 0.4)
+    context.set_line_width(1)
+    context.move_to(1, 1)
+    context.line_to(pixel_size.width, 1)
+    context.line_to(pixel_size.width, pixel_size.height)
+    context.line_to(1, pixel_size.height)
     context.line_to(1, 1)
     context.stroke()
 
@@ -198,4 +211,4 @@ def check_fonts(app_configs=None, **kwargs):
         render_size("DejaVu Sans", Pango.Weight.NORMAL, 11, 0, "test")
         return []
     except Exception as error:
-        return [weblate_check("weblate.C024", "Failed to use Pango: {}".format(error))]
+        return [weblate_check("weblate.C024", f"Failed to use Pango: {error}")]

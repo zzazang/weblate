@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -19,13 +19,14 @@
 
 from datetime import date
 
+from django.conf import settings
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
 from weblate.addons.base import BaseAddon
 from weblate.addons.events import EVENT_COMPONENT_UPDATE, EVENT_DAILY
 from weblate.addons.forms import AutoAddonForm
-from weblate.trans.tasks import auto_translate
+from weblate.trans.tasks import auto_translate_component
 
 
 class AutoTranslateAddon(BaseAddon):
@@ -41,18 +42,25 @@ class AutoTranslateAddon(BaseAddon):
     icon = "language.svg"
 
     def component_update(self, component):
-        self.daily(component)
+        transaction.on_commit(
+            lambda: auto_translate_component.delay(
+                component.pk, **self.instance.configuration
+            )
+        )
 
     def daily(self, component):
-        # Translate every component once in a week to reduce load
-        if component.id % 7 != date.today().weekday():
+        # Translate every component less frequenctly to reduce load.
+        # The translation is anyway triggered on update, so it should
+        # not matter that much that we run this less often.
+        if settings.BACKGROUND_TASKS == "never":
+            return
+        today = date.today()
+        if settings.BACKGROUND_TASKS == "monthly" and component.id % 30 != today.day:
+            return
+        if (
+            settings.BACKGROUND_TASKS == "weekly"
+            and component.id % 7 != today.weekday()
+        ):
             return
 
-        for translation in component.translation_set.iterator():
-            if translation.is_source:
-                continue
-            transaction.on_commit(
-                lambda: auto_translate.delay(
-                    None, translation.pk, **self.instance.configuration
-                )
-            )
+        self.component_update(component)

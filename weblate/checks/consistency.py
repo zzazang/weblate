@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,6 +17,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
+from functools import reduce
+
+from django.db.models import Count, Prefetch, Q
 from django.utils.translation import gettext_lazy as _
 
 from weblate.checks.base import TargetCheck
@@ -76,18 +79,62 @@ class ConsistencyCheck(TargetCheck):
     )
     ignore_untranslated = False
     propagates = True
+    batch_project_wide = True
 
     def check_target_unit(self, sources, targets, unit):
+        component = unit.translation.component
+        if not component.allow_translation_propagation:
+            return False
+
+        # Use last result if checks are batched
+        if component.batch_checks:
+            return self.handle_batch(unit, component)
+
         for other in unit.same_source_units:
             if unit.target == other.target:
                 continue
-            if unit.translated or other.state >= STATE_TRANSLATED:
+            if unit.translated or other.translated:
                 return True
         return False
 
     def check_single(self, source, target, unit):
         """We don't check target strings here."""
         return False
+
+    def check_component(self, component):
+        from weblate.trans.models import Unit
+
+        units = Unit.objects.filter(
+            translation__component__project=component.project,
+            translation__component__allow_translation_propagation=True,
+        )
+
+        # List strings with different targets
+        matches = (
+            units.values("id_hash", "translation__language", "translation__plural")
+            .annotate(Count("target", distinct=True))
+            .filter(target__count__gt=1)
+        )
+
+        if not matches:
+            return []
+
+        return (
+            units.filter(
+                reduce(
+                    lambda x, y: x
+                    | (
+                        Q(id_hash=y["id_hash"])
+                        & Q(translation__language=y["translation__language"])
+                        & Q(translation__plural=y["translation__plural"])
+                    ),
+                    matches,
+                    Q(),
+                )
+            )
+            .prefetch()
+            .prefetch_bulk()
+        )
 
 
 class TranslatedCheck(TargetCheck):
@@ -98,20 +145,37 @@ class TranslatedCheck(TargetCheck):
     description = _("This string has been translated in the past")
     ignore_untranslated = False
 
-    def check_target_unit(self, sources, targets, unit):
-        if unit.translated:
-            return False
+    def get_description(self, check_obj):
+        unit = check_obj.unit
+        target = self.check_target_unit(unit.source, unit.target, unit)
+        if not target:
+            return super().get_description(check_obj)
+        return _('Previous translation was "%s".') % target
 
+    @property
+    def change_states(self):
         from weblate.trans.models import Change
 
         states = {Change.ACTION_SOURCE_CHANGE}
         states.update(Change.ACTIONS_CONTENT)
+        return states
 
-        changes = unit.change_set.filter(action__in=states).order()
+    def check_target_unit(self, sources, targets, unit):
+        if unit.translated:
+            return False
 
-        for action in changes.values_list("action", flat=True):
-            if action in Change.ACTIONS_CONTENT:
-                return True
+        component = unit.translation.component
+
+        if component.batch_checks:
+            return self.handle_batch(unit, component)
+
+        from weblate.trans.models import Change
+
+        changes = unit.change_set.filter(action__in=self.change_states).order()
+
+        for action, target in changes.values_list("action", "target"):
+            if action in Change.ACTIONS_CONTENT and target:
+                return target
             if action == Change.ACTION_SOURCE_CHANGE:
                 break
 
@@ -120,3 +184,38 @@ class TranslatedCheck(TargetCheck):
     def check_single(self, source, target, unit):
         """We don't check target strings here."""
         return False
+
+    def get_fixup(self, unit):
+        target = self.check_target_unit(unit.source, unit.target, unit)
+        if not target:
+            return None
+        return [(".*", target, "u")]
+
+    def check_component(self, component):
+        from weblate.trans.models import Change, Unit
+
+        units = (
+            Unit.objects.filter(
+                translation__component=component,
+                change__action__in=self.change_states,
+                state__lt=STATE_TRANSLATED,
+            )
+            .prefetch_related(
+                Prefetch(
+                    "change_set",
+                    queryset=Change.objects.filter(
+                        action__in=self.change_states
+                    ).order(),
+                    to_attr="recent_consistency_changes",
+                )
+            )
+            .prefetch()
+            .prefetch_bulk()
+        )
+
+        for unit in units:
+            for change in unit.recent_consistency_changes:
+                if change.action in Change.ACTIONS_CONTENT and change.target:
+                    yield unit
+                if change.action == Change.ACTION_SOURCE_CHANGE:
+                    break

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -32,7 +32,9 @@ from weblate.lang.models import Language
 class AnnouncementManager(models.Manager):
     def context_filter(self, project=None, component=None, language=None):
         """Filter announcements by context."""
-        base = self.filter(Q(expiry__isnull=True) | Q(expiry__gte=timezone.now()))
+        base = self.filter(
+            Q(expiry__isnull=True) | Q(expiry__gte=timezone.now())
+        ).order()
 
         if language and project is None and component is None:
             return base.filter(project=None, component=None, language=language)
@@ -56,6 +58,26 @@ class AnnouncementManager(models.Manager):
 
         # All are None
         return base.filter(project=None, component=None, language=None)
+
+    def create(self, user=None, **kwargs):
+        from weblate.trans.models.change import Change
+
+        result = super().create(**kwargs)
+
+        Change.objects.create(
+            action=Change.ACTION_ANNOUNCEMENT,
+            project=result.project,
+            component=result.component,
+            announcement=result,
+            target=result.message,
+            user=user,
+        )
+        return result
+
+
+class AnnouncementQuerySet(models.QuerySet):
+    def order(self):
+        return self.order_by("id")
 
 
 class Announcement(models.Model):
@@ -107,30 +129,21 @@ class Announcement(models.Model):
             "deadline for next release."
         ),
     )
+    notify = models.BooleanField(
+        blank=True,
+        default=True,
+        verbose_name=gettext_lazy("Notify users"),
+    )
 
-    objects = AnnouncementManager()
+    objects = AnnouncementManager.from_queryset(AnnouncementQuerySet)()
 
     class Meta:
         app_label = "trans"
-        verbose_name = gettext_lazy("Announcement")
-        verbose_name_plural = gettext_lazy("Announcements")
+        verbose_name = "Announcement"
+        verbose_name_plural = "Announcements"
 
     def __str__(self):
         return self.message
-
-    def save(self, *args, **kwargs):
-        is_new = not self.id
-        super().save(*args, **kwargs)
-        if is_new:
-            from weblate.trans.models.change import Change
-
-            Change.objects.create(
-                action=Change.ACTION_MESSAGE,
-                project=self.project,
-                component=self.component,
-                announcement=self,
-                target=self.message,
-            )
 
     def clean(self):
         if self.project and self.component and self.component.project != self.project:

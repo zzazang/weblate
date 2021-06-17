@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,7 +17,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import gettext
 import re
 from collections import defaultdict
@@ -29,20 +28,21 @@ from django.db import models, transaction
 from django.db.models import Q
 from django.db.utils import OperationalError
 from django.urls import reverse
-from django.utils.encoding import force_str
 from django.utils.functional import cached_property
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy, pgettext_lazy
+from weblate_language_data.aliases import ALIASES
+from weblate_language_data.countries import DEFAULT_LANGS
+from weblate_language_data.languages import LANGUAGES
+from weblate_language_data.plurals import EXTRAPLURALS
+from weblate_language_data.rtl import RTL_LANGS
 
 from weblate.lang import data
-from weblate.langdata.aliases import ALIASES
-from weblate.langdata.countries import DEFAULT_LANGS
-from weblate.langdata.languages import LANGUAGES
-from weblate.langdata.plurals import EXTRAPLURALS
 from weblate.logger import LOGGER
-from weblate.trans.util import sort_choices, sort_objects
-from weblate.utils.stats import LanguageStats
+from weblate.trans.defines import LANGUAGE_CODE_LENGTH, LANGUAGE_NAME_LENGTH
+from weblate.trans.mixins import CacheKeyMixin
+from weblate.trans.util import sort_objects, sort_unicode
 from weblate.utils.templatetags.icons import icon
 from weblate.utils.validators import validate_plural_formula
 
@@ -77,16 +77,16 @@ def get_plural_type(base_code, plural_formula):
     if base_code in ("ar",):
         return data.PLURAL_ARABIC
 
-    # Log error in case of uknown mapping
+    # Log error in case of unknown mapping
     LOGGER.error("Can not guess type of plural for %s: %s", base_code, plural_formula)
 
     return data.PLURAL_UNKNOWN
 
 
-def get_english_lang():
+def get_default_lang():
     """Return object ID for English language."""
     try:
-        return Language.objects.english.id
+        return Language.objects.default_language.id
     except (Language.DoesNotExist, OperationalError):
         return -1
 
@@ -134,6 +134,10 @@ class LanguageQuerySet(models.QuerySet):
         if code.startswith("b+"):
             code = code[2:]
 
+        # Replace -r from Android by _
+        if len(code) == 6 and "-r" in code:
+            code = code.replace("-r", "_")
+
         # Handle duplicate language files for example "cs (2)"
         code = COPY_RE.sub("", code)
 
@@ -178,19 +182,21 @@ class LanguageQuerySet(models.QuerySet):
         expanded_code = None
 
         lookups = [
-            # First try getting language as is
+            # First try getting language as is (case-sensitive)
+            Q(code=code),
+            # Then try getting language as is (case-insensitive)
             Q(code__iexact=code),
             # Replace dash with underscore (for things as zh_Hant)
             Q(code__iexact=code.replace("-", "_")),
             # Replace plus with underscore (for things as zh+Hant+HK on Android)
             Q(code__iexact=code.replace("+", "_")),
             # Try using name
-            Q(name__iexact=code),
+            Q(name__iexact=code) & Q(code__in=data.NO_CODE_LANGUAGES),
         ]
 
         # Country codes used without underscore (ptbr insteat of pt_BR)
         if len(code) == 4:
-            expanded_code = "{}_{}".format(code[:2], code[2:])
+            expanded_code = f"{code[:2]}_{code[2:]}".lower()
             lookups.append(Q(code__iexact=expanded_code))
 
         for lookup in lookups:
@@ -211,14 +217,14 @@ class LanguageQuerySet(models.QuerySet):
         if country is not None:
             if "@" in country:
                 region, variant = country.split("@", 1)
-                country = "{0}@{1}".format(region.upper(), variant.lower())
+                country = f"{region.upper()}@{variant.lower()}"
             elif "_" in country:
                 # Xliff way of defining variants
                 region, variant = country.split("_", 1)
-                country = "{0}@{1}".format(region.upper(), variant.lower())
+                country = f"{region.upper()}@{variant.lower()}"
             else:
                 country = country.upper()
-            newcode = "{0}_{1}".format(lang.lower(), country)
+            newcode = f"{lang.lower()}_{country}"
         else:
             newcode = lang.lower()
 
@@ -255,7 +261,7 @@ class LanguageQuerySet(models.QuerySet):
         It is based on code and best guess of parameters.
         """
         # Create standard language
-        name = "{0} (generated)".format(code)
+        name = f"{code} (generated)"
         if create:
             lang = self.get_or_create(code=code, defaults={"name": name})[0]
         else:
@@ -315,17 +321,27 @@ class LanguageQuerySet(models.QuerySet):
         return language
 
     def as_choices(self):
-        return sort_choices(
-            (code, "{0} ({1})".format(_(name), code))
-            for name, code in self.values_list("name", "code")
+        return (
+            item[:2]
+            for item in sort_unicode(
+                (
+                    (code, f"{_(name)} ({code})", name)
+                    for name, code in self.values_list("name", "code")
+                ),
+                lambda tup: tup[2],
+            )
         )
 
     def get(self, *args, **kwargs):
         """Customized get caching getting of English language."""
         if not args and not kwargs.pop("skip_cache", False):
-            english = Language.objects.english
-            if kwargs in ({"code": "en"}, {"pk": english.pk}, {"id": english.id}):
-                return english
+            default = Language.objects.default_language
+            if kwargs in (
+                {"code": settings.DEFAULT_LANGUAGE},
+                {"pk": default.pk},
+                {"id": default.id},
+            ):
+                return default
         return super().get(*args, **kwargs)
 
 
@@ -333,13 +349,13 @@ class LanguageManager(models.Manager.from_queryset(LanguageQuerySet)):
     use_in_migrations = True
 
     def flush_object_cache(self):
-        if "english" in self.__dict__:
-            del self.__dict__["english"]
+        if "default_language" in self.__dict__:
+            del self.__dict__["default_language"]
 
     @cached_property
-    def english(self):
+    def default_language(self):
         """Return English language object."""
-        return self.get(code="en", skip_cache=True)
+        return self.get(code=settings.DEFAULT_LANGUAGE, skip_cache=True)
 
     def setup(self, update, logger=lambda x: x):
         """Create basic set of languages.
@@ -348,70 +364,38 @@ class LanguageManager(models.Manager.from_queryset(LanguageQuerySet)):
         """
         # Invalidate cache, we might change languages
         self.flush_object_cache()
+        languages = {
+            language.code: language for language in self.prefetch_related("plural_set")
+        }
+        plurals = {}
         # Create Weblate languages
         for code, name, nplurals, plural_formula in LANGUAGES:
-            lang, created = self.get_or_create(code=code, defaults={"name": name})
-            if created:
-                logger("Created language {}".format(code))
+            if code in languages:
+                lang = languages[code]
+            else:
+                languages[code] = lang = self.create(code=code, name=name)
+                logger(f"Created language {code}")
 
-            # Get plural type
-            plural_type = get_plural_type(lang.base_code, plural_formula)
-
+            direction = lang.guess_direction()
             # Should we update existing?
-            if update and lang.name != name:
+            if update and (lang.name != name or lang.direction != direction):
                 lang.name = name
-                logger("Updated language {}".format(code))
+                lang.direction = direction
+                logger(f"Updated language {code}")
                 lang.save()
 
             plural_data = {
-                "type": plural_type,
                 "number": nplurals,
                 "formula": plural_formula,
             }
-            try:
-                plural, created = lang.plural_set.get_or_create(
-                    source=Plural.SOURCE_DEFAULT, language=lang, defaults=plural_data
-                )
-                if created:
-                    logger(
-                        "Created default plural {} for language {}".format(
-                            plural_formula, code
-                        )
-                    )
-                else:
-                    modified = False
-                    for item in plural_data:
-                        if getattr(plural, item) != plural_data[item]:
-                            modified = True
-                            setattr(plural, item, plural_data[item])
-                    if modified:
-                        logger(
-                            "Updated default plural {} for language {}".format(
-                                plural_formula, code
-                            )
-                        )
-                        plural.save()
-            except Plural.MultipleObjectsReturned:
-                continue
 
-        # Create addditiona plurals
-        for code, _unused, nplurals, plural_formula in EXTRAPLURALS:
-            lang = self.get(code=code)
+            # Fetch existing plurals
+            plurals[code] = defaultdict(list)
+            for plural in lang.plural_set.iterator():
+                plurals[code][plural.source].append(plural)
 
-            # Get plural type
-            plural_type = get_plural_type(lang.base_code, plural_formula)
-
-            plural_data = {"type": plural_type}
-            plural, created = lang.plural_set.get_or_create(
-                source=Plural.SOURCE_GETTEXT,
-                language=lang,
-                number=nplurals,
-                formula=plural_formula,
-                defaults=plural_data,
-            )
-            if created:
-                logger("Created plural {} for language {}".format(plural_formula, code))
-            else:
+            if Plural.SOURCE_DEFAULT in plurals[code]:
+                plural = plurals[code][Plural.SOURCE_DEFAULT][0]
                 modified = False
                 for item in plural_data:
                     if getattr(plural, item) != plural_data[item]:
@@ -419,20 +403,60 @@ class LanguageManager(models.Manager.from_queryset(LanguageQuerySet)):
                         setattr(plural, item, plural_data[item])
                 if modified:
                     logger(
-                        "Updated plural {} for language {}".format(plural_formula, code)
+                        "Updated default plural {} for language {}".format(
+                            plural_formula, code
+                        )
                     )
                     plural.save()
+            else:
+                plural = lang.plural_set.create(
+                    source=Plural.SOURCE_DEFAULT, language=lang, **plural_data
+                )
+                plurals[code][Plural.SOURCE_DEFAULT].append(plural)
+                logger(
+                    "Created default plural {} for language {}".format(
+                        plural_formula, code
+                    )
+                )
+
+        # Create addditiona plurals
+        for code, _unused, nplurals, plural_formula in EXTRAPLURALS:
+            lang = languages[code]
+
+            for plural in plurals[code][Plural.SOURCE_GETTEXT]:
+                try:
+                    if plural.same_plural(nplurals, plural_formula):
+                        break
+                except ValueError:
+                    # Fall back to string compare if parsing failed
+                    if plural.number == nplurals and plural.formula == plural_formula:
+                        break
+            else:
+                plural = lang.plural_set.create(
+                    source=Plural.SOURCE_GETTEXT,
+                    number=nplurals,
+                    formula=plural_formula,
+                    type=get_plural_type(lang.base_code, plural_formula),
+                )
+                logger(f"Created plural {plural_formula} for language {code}")
 
 
 def setup_lang(sender, **kwargs):
     """Hook for creating basic set of languages on database migration."""
-    with transaction.atomic():
-        Language.objects.setup(False)
+    if settings.UPDATE_LANGUAGES:
+        with transaction.atomic():
+            Language.objects.setup(False)
 
 
-class Language(models.Model):
-    code = models.SlugField(unique=True, verbose_name=gettext_lazy("Language code"))
-    name = models.CharField(max_length=100, verbose_name=gettext_lazy("Language name"))
+class Language(models.Model, CacheKeyMixin):
+    code = models.SlugField(
+        max_length=LANGUAGE_CODE_LENGTH,
+        unique=True,
+        verbose_name=gettext_lazy("Language code"),
+    )
+    name = models.CharField(
+        max_length=LANGUAGE_NAME_LENGTH, verbose_name=gettext_lazy("Language name")
+    )
     direction = models.CharField(
         verbose_name=gettext_lazy("Text direction"),
         max_length=3,
@@ -447,23 +471,20 @@ class Language(models.Model):
     objects = LanguageManager()
 
     class Meta:
-        verbose_name = gettext_lazy("Language")
-        verbose_name_plural = gettext_lazy("Languages")
+        verbose_name = "Language"
+        verbose_name_plural = "Languages"
         # Use own manager to utilize caching of English
         base_manager_name = "objects"
 
     def __str__(self):
         if self.show_language_code:
-            return "{0} ({1})".format(_(self.name), self.code)
+            return f"{_(self.name)} ({self.code})"
         return _(self.name)
 
     def save(self, *args, **kwargs):
         """Set default direction for language."""
         if not self.direction:
-            if self.base_code in data.RTL_LANGS:
-                self.direction = "rtl"
-            else:
-                self.direction = "ltr"
+            self.direction = self.guess_direction()
         return super().save(*args, **kwargs)
 
     def get_absolute_url(self):
@@ -471,9 +492,22 @@ class Language(models.Model):
 
     def __init__(self, *args, **kwargs):
         """Constructor to initialize some cache properties."""
+        from weblate.utils.stats import LanguageStats
+
         super().__init__(*args, **kwargs)
         self._plural_examples = {}
         self.stats = LanguageStats(self)
+
+    def get_name(self):
+        """Not localized version of __str__."""
+        if self.show_language_code:
+            return f"{self.name} ({self.code})"
+        return self.name
+
+    def guess_direction(self):
+        if self.base_code in RTL_LANGS or self.code in RTL_LANGS:
+            return "rtl"
+        return "ltr"
 
     @property
     def show_language_code(self):
@@ -484,7 +518,7 @@ class Language(models.Model):
 
         Includes language and direction HTML.
         """
-        return mark_safe('lang="{0}" dir="{1}"'.format(self.code, self.direction))
+        return mark_safe(f'lang="{self.code}" dir="{self.direction}"')
 
     @cached_property
     def base_code(self):
@@ -496,6 +530,9 @@ class Language(models.Model):
     @cached_property
     def plural(self):
         return self.plural_set.filter(source=Plural.SOURCE_DEFAULT)[0]
+
+    def get_aliases_names(self):
+        return [alias for alias, codename in ALIASES.items() if codename == self.code]
 
 
 class PluralQuerySet(models.QuerySet):
@@ -540,11 +577,11 @@ class Plural(models.Model):
             data.PLURAL_ONE_TWO_FEW_MANY_OTHER,
             pgettext_lazy("Plural type", "One/two/few/many/other"),
         ),
-        (data.PLURAL_UNKNOWN, pgettext_lazy("Plural type", "Unknown")),
         (
             data.PLURAL_ZERO_ONE_TWO_FEW_MANY_OTHER,
             pgettext_lazy("Plural type", "Zero/one/two/few/many/other"),
         ),
+        (data.PLURAL_UNKNOWN, pgettext_lazy("Plural type", "Unknown")),
     )
     SOURCE_DEFAULT = 0
     SOURCE_GETTEXT = 1
@@ -570,7 +607,7 @@ class Plural(models.Model):
     )
     type = models.IntegerField(
         choices=PLURAL_CHOICES,
-        default=data.PLURAL_ONE_OTHER,
+        default=data.PLURAL_UNKNOWN,
         verbose_name=gettext_lazy("Plural type"),
         editable=False,
     )
@@ -579,8 +616,8 @@ class Plural(models.Model):
     objects = PluralQuerySet.as_manager()
 
     class Meta:
-        verbose_name = gettext_lazy("Plural form")
-        verbose_name_plural = gettext_lazy("Plural forms")
+        verbose_name = "Plural form"
+        verbose_name_plural = "Plural forms"
 
     def __str__(self):
         return self.get_type_display()
@@ -605,7 +642,7 @@ class Plural(models.Model):
 
     @cached_property
     def plural_form(self):
-        return "nplurals={0:d}; plural={1};".format(self.number, self.formula)
+        return f"nplurals={self.number:d}; plural={self.formula};"
 
     @cached_property
     def plural_function(self):
@@ -670,7 +707,7 @@ class Plural(models.Model):
     def get_plural_name(self, idx):
         """Return name for plural form."""
         try:
-            return force_str(data.PLURAL_NAMES[self.type][idx])
+            return str(data.PLURAL_NAMES[self.type][idx])
         except (IndexError, KeyError):
             if idx == 0:
                 return _("Singular")
@@ -690,8 +727,17 @@ class Plural(models.Model):
 class WeblateLanguagesConf(AppConf):
     """Languages settings."""
 
+    # Update languages on migration
+    UPDATE_LANGUAGES = True
+
     # Use simple language codes for default language/country combinations
     SIMPLIFY_LANGUAGES = True
+
+    # Default source languaage
+    DEFAULT_LANGUAGE = "en"
+
+    # List of basic languages to show for user when adding new translation
+    BASIC_LANGUAGES = None
 
     class Meta:
         prefix = ""

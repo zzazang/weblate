@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,14 +17,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 from django.conf import settings
 
 from weblate.machinery.base import MachineTranslation, MissingConfiguration
 
-# Weblate as a CAT tool should use v1 API
-DEEPL_TRANSLATE = "https://api.deepl.com/v1/translate"
-DEEPL_LANGUAGES = "https://api.deepl.com/v1/languages"
+DEEPL_TRANSLATE = "{}translate"
+DEEPL_LANGUAGES = "{}languages"
 
 
 class DeepLTranslation(MachineTranslation):
@@ -49,17 +47,27 @@ class DeepLTranslation(MachineTranslation):
         return super().map_language_code(code).replace("_", "-").upper()
 
     def download_languages(self):
-        """List of supported languages is currently hardcoded."""
         response = self.request(
-            "post", DEEPL_LANGUAGES, data={"auth_key": settings.MT_DEEPL_KEY},
+            "post",
+            DEEPL_LANGUAGES.format(settings.MT_DEEPL_API_URL),
+            data={"auth_key": settings.MT_DEEPL_KEY},
         )
         return [x["language"] for x in response.json()]
 
-    def download_translations(self, source, language, text, unit, user, search):
+    def download_translations(
+        self,
+        source,
+        language,
+        text: str,
+        unit,
+        user,
+        search: bool,
+        threshold: int = 75,
+    ):
         """Download list of possible translations from a service."""
         response = self.request(
             "post",
-            DEEPL_TRANSLATE,
+            DEEPL_TRANSLATE.format(settings.MT_DEEPL_API_URL),
             data={
                 "auth_key": settings.MT_DEEPL_KEY,
                 "text": text,

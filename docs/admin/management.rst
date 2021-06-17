@@ -69,12 +69,11 @@ In case you need to pass it a file, you can temporary add a volume:
 
 .. seealso::
 
-    :ref:`quick-docker`,
+    :doc:`install/docker`,
     :doc:`install/venv-debian`,
     :doc:`install/venv-suse`,
-    :doc:`install/venv-redhat`
-
-* :ref:`quick-source`, recommended for development.
+    :doc:`install/venv-redhat`,
+    :doc:`install/source`
 
 
 add_suggestions
@@ -84,7 +83,7 @@ add_suggestions
 
 .. versionadded:: 2.5
 
-Imports a translation from the file to use as a suggestions for the given translation.
+Imports a translation from the file to use as a suggestion for the given translation.
 It skips duplicated translations; only different ones are added.
 
 .. django-admin-option:: --author USER@EXAMPLE.COM
@@ -96,7 +95,7 @@ Example:
 
 .. code-block:: sh
 
-    weblate --author michal@cihar.com add_suggestions weblate master cs /tmp/suggestions-cs.po
+    weblate --author michal@cihar.com add_suggestions weblate application cs /tmp/suggestions-cs.po
 
 
 auto_translate
@@ -105,6 +104,10 @@ auto_translate
 .. django-admin:: auto_translate <project> <component> <language>
 
 .. versionadded:: 2.5
+
+.. versionchanged:: 4.6
+
+    Added parameter for translation mode.
 
 Performs automatic translation based on other component translations.
 
@@ -139,11 +142,16 @@ Performs automatic translation based on other component translations.
 
     Similarity threshold for machine translation, defaults to 80.
 
+.. django-admin-option:: --mode MODE
+
+    Specify translation mode, default is ``translate`` but ``fuzzy`` or ``suggest``
+    can be used.
+
 Example:
 
 .. code-block:: sh
 
-    weblate --user nijel --inconsistent --source phpmyadmin/master phpmyadmin 4-5 cs
+    weblate auto_translate --user nijel --inconsistent --source weblate/application weblate website cs
 
 .. seealso::
 
@@ -158,28 +166,6 @@ celery_queues
 
 Displays length of Celery task queues.
 
-changesite
-----------
-
-.. django-admin:: changesite
-
-.. versionadded:: 2.4
-
-Change or display the name of your site from the command-line without using the
-admin interface by adding this.
-
-.. django-admin-option:: --set-name NAME
-
-    Gives the site a name.
-
-.. django-admin-option:: --get-name
-
-    Prints the current name of your site.
-
-.. seealso::
-
-   :ref:`production-site`
-
 checkgit
 --------
 
@@ -188,7 +174,7 @@ checkgit
 Prints current state of the back-end Git repository.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 commitgit
 ---------
@@ -198,7 +184,7 @@ commitgit
 Commits any possible pending changes to the back-end Git repository.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 commit_pending
 --------------
@@ -208,7 +194,7 @@ commit_pending
 Commits pending changes older than a given age.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. django-admin-option:: --age HOURS
 
@@ -217,7 +203,7 @@ You can either define which project or component to update (for example
 
 .. note::
 
-   This is automatically perfomed in the background by Weblate, so there no
+   This is automatically performed in the background by Weblate, so there no
    real need to invoke this manually, besides forcing an earlier commit than
    specified by :ref:`component`.
 
@@ -251,7 +237,7 @@ Creates an ``admin`` account with a random password, unless it is specified.
 
 .. django-admin-option:: --no-password
 
-    Do not set password, this can be useful with --update.
+    Do not set password, this can be useful with `--update`.
 
 .. django-admin-option:: --username USERNAME
 
@@ -348,7 +334,6 @@ Example of JSON file:
 
 .. literalinclude:: ../../weblate/trans/tests/data/components.json
    :language: json
-   :encoding: utf-8
 
 .. seealso::
 
@@ -387,7 +372,7 @@ import_project
 .. versionchanged:: 3.0
 
     The import_project command is now based on the
-    :ref:`addon-weblate.discovery.discovery` addon, leading to some
+    :ref:`addon-weblate.discovery.discovery` add-on, leading to some
     changes in behavior and what parameters are accepted.
 
 Batch imports components into project based on filemask.
@@ -506,6 +491,28 @@ Filtering only translations in a chosen language:
         https://github.com/WeblateOrg/weblate.git \
         'weblate/locale/*/LC_MESSAGES/**.po'
 
+Importing Sphinx documentation split to multiple files:
+
+.. code-block:: console
+
+    $ weblate import_project --name-template 'Documentation: %s' \
+        --file-format po \
+        project https://github.com/project/docs.git master \
+        'docs/locale/*/LC_MESSAGES/**.po'
+
+Importing Sphinx documentation split to multiple files and directories:
+
+.. code-block:: console
+
+    $ weblate import_project --name-template 'Directory 1: %s' \
+        --file-format po \
+        project https://github.com/project/docs.git master \
+        'docs/locale/*/LC_MESSAGES/dir1/**.po'
+    $ weblate import_project --name-template 'Directory 2: %s' \
+        --file-format po \
+        project https://github.com/project/docs.git master \
+        'docs/locale/*/LC_MESSAGES/dir2/**.po'
+
 .. seealso::
 
     More detailed examples can be found in the :ref:`starting` chapter,
@@ -544,22 +551,22 @@ install_addon
 
 .. django-admin:: install_addon --addon ADDON <project|project/component>
 
-Installs an addon to a set of components.
+Installs an add-on to a set of components.
 
 .. django-admin-option:: --addon ADDON
 
-   Name of the addon to install. For example ``weblate.gettext.customize``.
+   Name of the add-on to install. For example ``weblate.gettext.customize``.
 
 .. django-admin-option:: --configuration CONFIG
 
-   JSON encoded configuration of an addon.
+   JSON encoded configuration of an add-on.
 
 .. django-admin-option:: --update
 
-   Update the existing addon configuration.
+   Update the existing add-on configuration.
 
-You can either define which project or component to install the addon in (for example
-``weblate/master``), or use ``--all`` to include all existing components.
+You can either define which project or component to install the add-on in (for example
+``weblate/application``), or use ``--all`` to include all existing components.
 
 To install :ref:`addon-weblate.gettext.customize` for all components:
 
@@ -569,7 +576,7 @@ To install :ref:`addon-weblate.gettext.customize` for all components:
 
 .. seealso::
 
-   :ref:`addons`
+   :doc:`addons`
 
 list_languages
 --------------
@@ -579,7 +586,7 @@ list_languages
 Lists supported languages in MediaWiki markup - language codes, English names
 and localized names.
 
-This is used to generate <https://wiki.l10n.cz/Jazyky>.
+This is used to generate <https://wiki.l10n.cz/Slovn%C3%ADk_s_n%C3%A1zvy_jazyk%C5%AF>.
 
 list_translators
 ----------------
@@ -591,14 +598,14 @@ Lists translators by contributed language for the given project::
     [French]
     Jean Dupont <jean.dupont@example.com>
     [English]
-    John Doe <jd@exemple.com>
+    John Doe <jd@example.com>
 
 .. django-admin-option:: --language-code
 
     List names by language code instead of language name.
 
 You can either define which project or component to use (for example
-``weblate/master``), or use ``--all`` to list translators from all existing
+``weblate/application``), or use ``--all`` to list translators from all existing
 components.
 
 list_versions
@@ -625,7 +632,7 @@ repository).
     Limit processing to a single language.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. note::
 
@@ -645,7 +652,7 @@ Prevents further translation of a component.
     Useful in case you want to do some maintenance on the underlying repository.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. seealso::
 
@@ -685,11 +692,11 @@ Pushes committed changes to the upstream VCS repository.
     Force commits any pending changes, prior to pushing.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. note::
 
-    Weblate pushes changes automatically if :guilabel:`Push on commit` in
+    Weblate pushes changes automatically if :ref:`component-push_on_commit` in
     :ref:`component` is turned on, which is the default.
 
 unlock_translation
@@ -704,7 +711,7 @@ Unlocks a given component, making it available for translation.
     Useful in case you want to do some maintenance on the underlying repository.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. seealso::
 
@@ -719,7 +726,7 @@ Configures default groups and optionally assigns all users to that default group
 
 .. django-admin-option:: --no-privs-update
 
-    Turns of automatic updating of existing groups (only adds new ones).
+    Turns off automatic updating of existing groups (only adds new ones).
 
 .. django-admin-option:: --no-projects-update
 
@@ -739,7 +746,7 @@ Updates list of defined languages in Weblate.
 
 .. django-admin-option:: --no-update
 
-    Turns of automatic updates of existing languages (only adds new ones).
+    Turns off automatic updates of existing languages (only adds new ones).
 
 updatechecks
 ------------
@@ -753,7 +760,7 @@ Updates all checks for all strings.
     Useful for upgrades which do major changes to checks.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 updategit
 ---------
@@ -763,7 +770,7 @@ updategit
 Fetches remote VCS repositories and updates the internal cache.
 
 You can either define which project or component to update (for example
-``weblate/master``), or use ``--all`` to update all existing components.
+``weblate/application``), or use ``--all`` to update all existing components.
 
 .. note::
 

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,14 +23,15 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView
 from PIL import Image
 
-from weblate.screenshots.forms import ScreenshotForm
+from weblate.screenshots.forms import ScreenshotEditForm, ScreenshotForm, SearchForm
 from weblate.screenshots.models import Screenshot
-from weblate.trans.models import Unit
+from weblate.trans.models import Change, Unit
 from weblate.utils import messages
 from weblate.utils.locale import c_locale
 from weblate.utils.search import parse_query
@@ -38,7 +39,7 @@ from weblate.utils.views import ComponentViewMixin
 
 try:
     with c_locale():
-        from tesserocr import PyTessBaseAPI, RIL
+        from tesserocr import RIL, PyTessBaseAPI
     HAS_OCR = True
 except ImportError:
     HAS_OCR = False
@@ -49,9 +50,7 @@ def try_add_source(request, obj):
         return False
 
     try:
-        source = obj.component.source_translation.unit_set.get(
-            pk=int(request.POST["source"])
-        )
+        source = obj.translation.unit_set.get(pk=int(request.POST["source"]))
     except (Unit.DoesNotExist, ValueError):
         return False
 
@@ -66,7 +65,11 @@ class ScreenshotList(ListView, ComponentViewMixin):
 
     def get_queryset(self):
         self.kwargs["component"] = self.get_component()
-        return Screenshot.objects.filter(component=self.kwargs["component"]).order()
+        return (
+            Screenshot.objects.filter(translation__component=self.kwargs["component"])
+            .prefetch_related("translation__language")
+            .order()
+        )
 
     def get_context_data(self, **kwargs):
         result = super().get_context_data(**kwargs)
@@ -76,20 +79,24 @@ class ScreenshotList(ListView, ComponentViewMixin):
             if self._add_form is not None:
                 result["add_form"] = self._add_form
             else:
-                result["add_form"] = ScreenshotForm()
+                result["add_form"] = ScreenshotForm(component)
         return result
 
     def post(self, request, **kwargs):
         component = self.get_component()
         if not request.user.has_perm("screenshot.add", component):
             raise PermissionDenied()
-        self._add_form = ScreenshotForm(request.POST, request.FILES)
+        self._add_form = ScreenshotForm(component, request.POST, request.FILES)
         if self._add_form.is_valid():
             obj = Screenshot.objects.create(
-                component=component, user=request.user, **self._add_form.cleaned_data
+                user=request.user, **self._add_form.cleaned_data
             )
-            request.user.profile.uploaded += 1
-            request.user.profile.save(update_fields=["uploaded"])
+            request.user.profile.increase_count("uploaded")
+            obj.change_set.create(
+                action=Change.ACTION_SCREENSHOT_ADDED,
+                user=request.user,
+                target=obj.name,
+            )
 
             try_add_source(request, obj)
             messages.success(
@@ -112,28 +119,34 @@ class ScreenshotDetail(DetailView):
 
     def get_object(self, *args, **kwargs):
         obj = super().get_object(*args, **kwargs)
-        self.request.user.check_access(obj.component.project)
+        self.request.user.check_access_component(obj.translation.component)
         return obj
 
     def get_context_data(self, **kwargs):
         result = super().get_context_data(**kwargs)
-        component = result["object"].component
+        component = result["object"].translation.component
         if self.request.user.has_perm("screenshot.edit", component):
             if self._edit_form is not None:
                 result["edit_form"] = self._edit_form
             else:
-                result["edit_form"] = ScreenshotForm(instance=result["object"])
+                result["edit_form"] = ScreenshotEditForm(instance=result["object"])
         return result
 
     def post(self, request, **kwargs):
         obj = self.get_object()
-        if request.user.has_perm("screenshot.edit", obj.component):
-            self._edit_form = ScreenshotForm(request.POST, request.FILES, instance=obj)
+        if request.user.has_perm("screenshot.edit", obj.translation):
+            self._edit_form = ScreenshotEditForm(
+                request.POST, request.FILES, instance=obj
+            )
             if self._edit_form.is_valid():
                 if request.FILES:
                     obj.user = request.user
-                    request.user.profile.uploaded += 1
-                    request.user.profile.save(update_fields=["uploaded"])
+                    request.user.profile.increase_count("uploaded")
+                    obj.change_set.create(
+                        action=Change.ACTION_SCREENSHOT_UPLOADED,
+                        user=request.user,
+                        target=obj.name,
+                    )
                 self._edit_form.save()
             else:
                 return self.get(request, **kwargs)
@@ -144,11 +157,11 @@ class ScreenshotDetail(DetailView):
 @login_required
 def delete_screenshot(request, pk):
     obj = get_object_or_404(Screenshot, pk=pk)
-    request.user.check_access(obj.component.project)
-    if not request.user.has_perm("screenshot.delete", obj.component):
+    component = obj.translation.component
+    if not request.user.has_perm("screenshot.delete", obj.translation):
         raise PermissionDenied()
 
-    kwargs = {"project": obj.component.project.slug, "component": obj.component.slug}
+    kwargs = {"project": component.project.slug, "component": component.slug}
 
     obj.delete()
 
@@ -159,8 +172,7 @@ def delete_screenshot(request, pk):
 
 def get_screenshot(request, pk):
     obj = get_object_or_404(Screenshot, pk=pk)
-    request.user.check_access(obj.component.project)
-    if not request.user.has_perm("screenshot.edit", obj.component):
+    if not request.user.has_perm("screenshot.edit", obj.translation.component):
         raise PermissionDenied()
     return obj
 
@@ -177,34 +189,48 @@ def remove_source(request, pk):
     return redirect(obj)
 
 
-def search_results(code, obj, units=None):
+def search_results(request, code, obj, units=None):
     if units is None:
         units = []
     else:
-        units = units.exclude(id_hash__in=obj.units.values_list("id_hash", flat=True))
+        units = (
+            units.exclude(id__in=obj.units.values_list("id", flat=True))
+            .prefetch()
+            .prefetch_full()
+        )
 
-    results = [
-        {
-            "text": unit.get_source_plurals()[0],
-            "pk": unit.pk,
-            "context": unit.context,
-            "location": unit.location,
+    return JsonResponse(
+        data={
+            "responseCode": code,
+            "results": render_to_string(
+                "screenshots/screenshot_sources_search.html",
+                {
+                    "object": obj,
+                    "units": units,
+                    "user": request.user,
+                },
+            ),
         }
-        for unit in units
-    ]
-
-    return JsonResponse(data={"responseCode": code, "results": results})
+    )
 
 
 @login_required
 @require_POST
 def search_source(request, pk):
     obj = get_screenshot(request, pk)
-    translation = obj.component.source_translation
+    translation = obj.translation
 
-    units = translation.unit_set.filter(parse_query(request.POST.get("q", "")))
-
-    return search_results(200, obj, units)
+    form = SearchForm(request.POST)
+    if not form.is_valid():
+        return search_results(request, 400, obj)
+    return search_results(
+        request,
+        200,
+        obj,
+        translation.unit_set.filter(
+            parse_query(form.cleaned_data["q"], project=translation.component.project)
+        ),
+    )
 
 
 def ocr_extract(api, image, strings):
@@ -224,8 +250,8 @@ def ocr_extract(api, image, strings):
 def ocr_search(request, pk):
     obj = get_screenshot(request, pk)
     if not HAS_OCR:
-        return search_results(500, obj)
-    translation = obj.component.source_translation
+        return search_results(request, 500, obj)
+    translation = obj.translation
 
     # Load image
     original_image = Image.open(obj.image.path)
@@ -252,7 +278,9 @@ def ocr_search(request, pk):
     original_image.close()
     scaled_image.close()
 
-    return search_results(200, obj, translation.unit_set.filter(pk__in=results))
+    return search_results(
+        request, 200, obj, translation.unit_set.filter(pk__in=results)
+    )
 
 
 @login_required

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -35,6 +35,9 @@ USERNAME_MATCHER = re.compile(r"^[\w@+-][\w.@+-]*$")
 
 # Reject some suspicious e-mail addresses, based on checks enforced by Exim MTA
 EMAIL_BLACKLIST = re.compile(r"^([./|]|.*([@%!`#&?]|/\.\./))")
+
+# Matches Git condition on "name consists only of disallowed characters"
+CRUD_RE = re.compile(r"^[.,;:<>\"'\\]+$")
 
 ALLOWED_IMAGES = {"image/jpeg", "image/png", "image/apng", "image/gif"}
 
@@ -73,7 +76,7 @@ def validate_re(value, groups=None, allow_empty=True):
                 _(
                     'Regular expression is missing named group "{0}", '
                     "the simplest way to define it is {1}."
-                ).format(group, "(?P<{}>.*)".format(group))
+                ).format(group, f"(?P<{group}>.*)")
             )
 
 
@@ -146,6 +149,10 @@ def validate_fullname(val):
         raise ValidationError(
             _("Please avoid using special characters in the full name.")
         )
+    # Validates full name that would be rejected by Git
+    if CRUD_RE.match(val):
+        raise ValidationError(_("Name consists only of disallowed characters."))
+
     return val
 
 
@@ -204,3 +211,19 @@ def validate_filename(value):
                 "Maybe you want to use: {}"
             ).format(cleaned)
         )
+
+
+def validate_slug(value):
+    """Prohibits some special values."""
+    # This one is used as wildcard in the URL for widgets and translate pages
+    if value == "-":
+        raise ValidationError(_("This name is prohibited"))
+
+
+def validate_language_aliases(value):
+    """Validates language aliases - comma separated semi colon values."""
+    if not value:
+        return
+    for part in value.split(","):
+        if part.count(":") != 1:
+            raise ValidationError(_("Syntax error in language aliases."))

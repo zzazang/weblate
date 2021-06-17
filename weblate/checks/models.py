@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,18 +17,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import json
 
 from appconf import AppConf
-from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
-from django.db.models.signals import post_delete, post_save
-from django.dispatch import receiver
+from django.db.models import Q
 from django.utils.functional import cached_property
 
 from weblate.utils.classloader import ClassLoader
-from weblate.utils.decorators import disable_for_loaddata
 
 
 class ChecksLoader(ClassLoader):
@@ -62,18 +58,23 @@ class WeblateChecksConf(AppConf):
         "weblate.checks.chars.EndSemicolonCheck",
         "weblate.checks.chars.MaxLengthCheck",
         "weblate.checks.chars.KashidaCheck",
-        "weblate.checks.chars.PuctuationSpacingCheck",
+        "weblate.checks.chars.PunctuationSpacingCheck",
         "weblate.checks.format.PythonFormatCheck",
         "weblate.checks.format.PythonBraceFormatCheck",
         "weblate.checks.format.PHPFormatCheck",
         "weblate.checks.format.CFormatCheck",
         "weblate.checks.format.PerlFormatCheck",
         "weblate.checks.format.JavaScriptFormatCheck",
+        "weblate.checks.format.LuaFormatCheck",
+        "weblate.checks.format.ObjectPascalFormatCheck",
+        "weblate.checks.format.SchemeFormatCheck",
         "weblate.checks.format.CSharpFormatCheck",
         "weblate.checks.format.JavaFormatCheck",
         "weblate.checks.format.JavaMessageFormatCheck",
         "weblate.checks.format.PercentPlaceholdersCheck",
+        "weblate.checks.format.VueFormattingCheck",
         "weblate.checks.format.I18NextInterpolationCheck",
+        "weblate.checks.format.ESTemplateLiteralsCheck",
         "weblate.checks.angularjs.AngularJSInterpolationCheck",
         "weblate.checks.qt.QtFormatCheck",
         "weblate.checks.qt.QtPluralCheck",
@@ -102,10 +103,24 @@ class WeblateChecksConf(AppConf):
         "weblate.checks.source.MultipleFailingCheck",
         "weblate.checks.source.LongUntranslatedCheck",
         "weblate.checks.format.MultipleUnnamedFormatsCheck",
+        "weblate.checks.glossary.GlossaryCheck",
     )
 
     class Meta:
         prefix = ""
+
+
+class CheckQuerySet(models.QuerySet):
+    def filter_access(self, user):
+        if user.is_superuser:
+            return self
+        return self.filter(
+            Q(unit__translation__component__project_id__in=user.allowed_project_ids)
+            & (
+                Q(unit__translation__component__restricted=False)
+                | Q(unit__translation__component_id__in=user.component_permissions)
+            )
+        )
 
 
 class Check(models.Model):
@@ -113,7 +128,15 @@ class Check(models.Model):
     check = models.CharField(max_length=50, choices=CHECKS.get_choices())
     dismissed = models.BooleanField(db_index=True, default=False)
 
-    weblate_unsafe_delete = True
+    objects = CheckQuerySet.as_manager()
+
+    class Meta:
+        unique_together = ("unit", "check")
+        verbose_name = "Quality check"
+        verbose_name_plural = "Quality checks"
+
+    def __str__(self):
+        return str(self.get_name())
 
     @cached_property
     def check_obj(self):
@@ -121,12 +144,6 @@ class Check(models.Model):
             return CHECKS[self.check]
         except KeyError:
             return None
-
-    class Meta:
-        unique_together = ("unit", "check")
-
-    def __str__(self):
-        return str(self.get_name())
 
     def is_enforced(self):
         return self.check in self.unit.translation.component.enforced_checks
@@ -152,49 +169,19 @@ class Check(models.Model):
             return self.check_obj.name
         return self.check
 
-    def get_doc_url(self):
+    def get_doc_url(self, user=None):
         if self.check_obj:
-            return self.check_obj.get_doc_url()
+            return self.check_obj.get_doc_url(user=user)
         return ""
 
     def set_dismiss(self, state=True):
         """Set ignore flag."""
         self.dismissed = state
-        self.save()
+        self.save(update_fields=["dismissed"])
+        self.unit.translation.invalidate_cache()
 
 
-@receiver(post_save, sender=Check)
-@disable_for_loaddata
-def check_post_save(sender, instance, created, **kwargs):
-    """Handle check creation or updates."""
-    if not created:
-        instance.unit.translation.invalidate_cache()
-
-
-@receiver(post_delete, sender=Check)
-@disable_for_loaddata
-def remove_complimentary_checks(sender, instance, **kwargs):
-    """Remove propagate checks from all units."""
-    instance.unit.translation.invalidate_cache()
-    check_obj = instance.check_obj
-    if not check_obj:
-        return
-
-    # Handle propagating checks - remove on other units
-    if check_obj.propagates:
-        Check.objects.filter(
-            unit__in=instance.unit.same_source_units, check=instance.check
-        ).delete()
-        for unit in instance.unit.same_source_units:
-            unit.translation.invalidate_cache()
-
-    # Update source checks if needed
-    if check_obj.target:
-        unit = instance.unit
-        if unit.is_batch_update:
-            unit.translation.component.updated_sources[unit.id_hash] = unit.source_info
-        else:
-            try:
-                unit.source_info.run_checks()
-            except ObjectDoesNotExist:
-                pass
+def get_display_checks(unit):
+    for check, check_obj in CHECKS.target.items():
+        if check_obj.should_display(unit):
+            yield Check(unit=unit, dismissed=False, check=check)

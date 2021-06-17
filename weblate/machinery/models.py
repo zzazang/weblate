@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -51,6 +51,15 @@ class WeblateConf(AppConf):
     # Google API key for Google Translate API
     GOOGLE_KEY = None
 
+    # Google Translate API3 credentials and project id
+    GOOGLE_CREDENTIALS = None
+    GOOGLE_PROJECT = None
+    GOOGLE_LOCATION = "global"
+
+    # ModernMT
+    MT_MODERNMT_KEY = None
+    MT_MODERNMT_URL = "https://api.modernmt.com/"
+
     # API key for Yandex Translate API
     YANDEX_KEY = None
 
@@ -59,6 +68,7 @@ class WeblateConf(AppConf):
 
     # API key for DeepL API
     DEEPL_KEY = None
+    DEEPL_API_URL = "https://api.deepl.com/v2/"
 
     # SAP Translation Hub
     SAP_BASE_URL = None

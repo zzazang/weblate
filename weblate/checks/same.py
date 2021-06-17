@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,16 +22,11 @@ import re
 
 from django.utils.html import strip_tags
 from django.utils.translation import gettext_lazy as _
+from weblate_language_data.check_languages import LANGUAGES
 
 from weblate.checks.base import TargetCheck
-from weblate.checks.data import SAME_BLACKLIST
-from weblate.checks.format import (
-    C_PRINTF_MATCH,
-    PHP_PRINTF_MATCH,
-    PYTHON_BRACE_MATCH,
-    PYTHON_PRINTF_MATCH,
-)
-from weblate.checks.languages import LANGUAGES
+from weblate.checks.data import IGNORE_WORDS
+from weblate.checks.format import FLAG_RULES, PERCENT_MATCH
 from weblate.checks.qt import QT_FORMAT_MATCH, QT_PLURAL_MATCH
 from weblate.checks.ruby import RUBY_FORMAT_MATCH
 
@@ -61,9 +56,7 @@ PATH_RE = re.compile(r"(^|[ ])(/[a-zA-Z0-9=:?._-]+)+")
 
 TEMPLATE_RE = re.compile(r"{[a-z_-]+}|@[A-Z_]@", re.IGNORECASE)
 
-RST_MATCH = re.compile(
-    r"(?::(ref|config:option|file|guilabel|download):`[^`]+`|``[^`]+``)"
-)
+RST_MATCH = re.compile(r"(:[a-z:]+:`[^`]+`|``[^`]+``)")
 
 SPLIT_RE = re.compile(
     r"(?:\&(?:nbsp|rsaquo|lt|gt|amp|ldquo|rdquo|times|quot);|"
@@ -82,15 +75,11 @@ def strip_format(msg, flags):
 
     These are quite often not changed by translators.
     """
-    if "python-format" in flags:
-        regex = PYTHON_PRINTF_MATCH
-    elif "python-brace-format" in flags:
-        regex = PYTHON_BRACE_MATCH
-    elif "php-format" in flags:
-        regex = PHP_PRINTF_MATCH
-    elif "c-format" in flags:
-        regex = C_PRINTF_MATCH
-    elif "qt-format" in flags:
+    for format_flag, (regex, _is_position_based) in FLAG_RULES.items():
+        if format_flag in flags:
+            return regex.sub("", msg)
+
+    if "qt-format" in flags:
         regex = QT_FORMAT_MATCH
     elif "qt-plural-format" in flags:
         regex = QT_PLURAL_MATCH
@@ -98,6 +87,8 @@ def strip_format(msg, flags):
         regex = RUBY_FORMAT_MATCH
     elif "rst-text" in flags:
         regex = RST_MATCH
+    elif "percent-placeholders" in flags:
+        regex = PERCENT_MATCH
     else:
         return msg
     stripped = regex.sub("", msg)
@@ -141,7 +132,7 @@ def test_word(word, extra_ignore):
     """Test whether word should be ignored."""
     return (
         len(word) <= 2
-        or word in SAME_BLACKLIST
+        or word in IGNORE_WORDS
         or word in LANGUAGES
         or word in extra_ignore
     )
@@ -151,7 +142,8 @@ def strip_placeholders(msg, unit):
 
     return re.sub(
         "|".join(
-            re.escape(param) for param in unit.all_flags.get_value("placeholders")
+            re.escape(param) if isinstance(param, str) else param.pattern
+            for param in unit.all_flags.get_value("placeholders")
         ),
         "",
         msg,
@@ -213,7 +205,7 @@ class SameCheck(TargetCheck):
         if unit.readonly or super().should_skip(unit):
             return True
 
-        source_language = unit.translation.component.project.source_language.base_code
+        source_language = unit.translation.component.source_language.base_code
 
         # Ignore the check for source language,
         # English variants will have most things not translated

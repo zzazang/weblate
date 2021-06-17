@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -24,7 +24,6 @@ import unicodedata
 from django.conf import settings
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.utils.encoding import force_str
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext as _
 from social_core.exceptions import AuthAlreadyAssociated, AuthMissingParameter
@@ -34,8 +33,12 @@ from social_core.utils import PARTIAL_TOKEN_SESSION_NAME
 from weblate.accounts.models import AuditLog, VerifiedEmail
 from weblate.accounts.notifications import send_notification_email
 from weblate.accounts.templatetags.authnames import get_auth_name
-from weblate.accounts.utils import cycle_session_keys, invalidate_reset_codes
-from weblate.auth.models import User
+from weblate.accounts.utils import (
+    adjust_session_expiry,
+    cycle_session_keys,
+    invalidate_reset_codes,
+)
+from weblate.auth.models import User, get_anonymous
 from weblate.trans.defines import FULLNAME_LENGTH
 from weblate.utils import messages
 from weblate.utils.requests import request
@@ -45,12 +48,20 @@ STRIP_MATCHER = re.compile(r"[^\w\s.@+-]")
 CLEANUP_MATCHER = re.compile(r"[-\s]+")
 
 
+class UsernameAlreadyAssociated(AuthAlreadyAssociated):
+    pass
+
+
+class EmailAlreadyAssociated(AuthAlreadyAssociated):
+    pass
+
+
 def get_github_email(access_token):
     """Get real e-mail from GitHub."""
     response = request(
         "get",
         "https://api.github.com/user/emails",
-        headers={"Authorization": "token {0}".format(access_token)},
+        headers={"Authorization": f"token {access_token}"},
         timeout=10.0,
     )
     data = response.json()
@@ -76,7 +87,7 @@ def reauthenticate(strategy, backend, user, social, uid, weblate_action, **kwarg
     if user and not social and user.has_usable_password():
         session["reauthenticate"] = {
             "backend": backend.name,
-            "backend_verbose": force_str(get_auth_name(backend.name)),
+            "backend_verbose": str(get_auth_name(backend.name)),
             "uid": uid,
             "user_pk": user.pk,
         }
@@ -121,7 +132,7 @@ def send_validation(strategy, backend, code, partial_token):
         session.create()
     session["registration-email-sent"] = True
 
-    url = "{0}?verification_code={1}&partial_token={2}".format(
+    url = "{}?verification_code={}&partial_token={}".format(
         reverse("social:complete", args=(backend.name,)), code.code, partial_token
     )
 
@@ -136,6 +147,15 @@ def send_validation(strategy, backend, code, partial_token):
         template = "invite"
         context.update(session["invitation_context"])
 
+    # Create audit log, it might be for anonymous at this point for new registrations
+    AuditLog.objects.create(
+        strategy.request.user,
+        strategy.request,
+        "sent-email",
+        email=code.email,
+    )
+
+    # Send actual confirmation
     send_notification_email(None, [code.email], template, info=url, context=context)
 
 
@@ -189,9 +209,9 @@ def verify_open(strategy, backend, user, weblate_action, **kwargs):
     # Check whether registration is open
     if (
         not user
-        and not settings.REGISTRATION_OPEN
-        and backend.name not in settings.REGISTRATION_ALLOW_BACKENDS
         and weblate_action not in ("reset", "remove", "invite")
+        and (not settings.REGISTRATION_OPEN or settings.REGISTRATION_ALLOW_BACKENDS)
+        and backend.name not in settings.REGISTRATION_ALLOW_BACKENDS
     ):
         raise AuthMissingParameter(backend, "disabled")
 
@@ -249,8 +269,8 @@ def verify_username(strategy, backend, details, username, user=None, **kwargs):
     """
     if user or not username:
         return
-    if User.objects.filter(username__iexact=username).exists():
-        raise AuthAlreadyAssociated(backend, "Username exists")
+    if User.objects.filter(username=username).exists():
+        raise UsernameAlreadyAssociated(backend, "Username exists")
     return
 
 
@@ -279,7 +299,7 @@ def ensure_valid(
     weblate_expires,
     new_association,
     details,
-    **kwargs
+    **kwargs,
 ):
     """Ensure the activation link is still."""
     # Didn't the link expire?
@@ -291,7 +311,7 @@ def ensure_valid(
         if strategy.request.user.is_authenticated:
             messages.warning(
                 strategy.request,
-                _("You can not complete password reset while signed in!"),
+                _("You can not complete password reset while signed in."),
             )
             messages.warning(
                 strategy.request, _("The registration link has been invalidated.")
@@ -309,12 +329,12 @@ def ensure_valid(
         if registering_user is None:
             messages.warning(
                 strategy.request,
-                _("You can not complete registration while signed in!"),
+                _("You can not complete registration while signed in."),
             )
         else:
             messages.warning(
                 strategy.request,
-                _("You can confirm your registration only while signed in!"),
+                _("You can confirm your registration only while signed in."),
             )
         messages.warning(
             strategy.request, _("The registration link has been invalidated.")
@@ -324,13 +344,15 @@ def ensure_valid(
 
     # Verify if this mail is not used on other accounts
     if new_association:
-        same = VerifiedEmail.objects.filter(email=details["email"])
+        if "email" not in details:
+            raise AuthMissingParameter(backend, "email")
+        same = VerifiedEmail.objects.filter(email__iexact=details["email"])
         if user:
             same = same.exclude(social__user=user)
 
         if same.exists():
             AuditLog.objects.create(same[0].social.user, strategy.request, "connect")
-            raise AuthAlreadyAssociated(backend, "E-mail exists")
+            raise EmailAlreadyAssociated(backend, "E-mail exists")
 
 
 def store_email(strategy, backend, user, social, details, **kwargs):
@@ -346,16 +368,34 @@ def store_email(strategy, backend, user, social, details, **kwargs):
 
 
 def notify_connect(
-    strategy, backend, user, social, new_association=False, is_new=False, **kwargs
+    strategy,
+    details,
+    backend,
+    user,
+    social,
+    new_association=False,
+    is_new=False,
+    **kwargs,
 ):
     """Notify about adding new link."""
+    # Adjust possibly pending email confirmation audit logs
+    AuditLog.objects.filter(
+        user=get_anonymous(),
+        activity="sent-email",
+        params={"email": details["email"]},
+    ).update(user=user)
     if user and not is_new:
         if new_association:
             action = "auth-connect"
         else:
             action = "login"
+            adjust_session_expiry(strategy.request)
         AuditLog.objects.create(
-            user, strategy.request, action, method=backend.name, name=social.uid,
+            user,
+            strategy.request,
+            action,
+            method=backend.name,
+            name=social.uid,
         )
     # Remove partial pipeline
     session = strategy.request.session
@@ -373,7 +413,7 @@ def user_full_name(strategy, details, username, user=None, **kwargs):
             last_name = details.get("last_name", "")
 
             if first_name and first_name not in last_name:
-                full_name = "{0} {1}".format(first_name, last_name)
+                full_name = f"{first_name} {last_name}"
             elif first_name:
                 full_name = first_name
             else:
@@ -406,9 +446,7 @@ def slugify_username(value):
     - Merges whitespaces and - into single -
     """
     value = (
-        unicodedata.normalize("NFKD", force_str(value))
-        .encode("ascii", "ignore")
-        .decode("ascii")
+        unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
     )
 
     # Return username if it matches our standards

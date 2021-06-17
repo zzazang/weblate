@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,10 +17,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import os
 import subprocess
 from itertools import chain
+from typing import List, Optional, Tuple
 
 from django.core.exceptions import ValidationError
 from django.utils.functional import cached_property
@@ -39,26 +39,28 @@ from weblate.trans.exceptions import FileParseError
 from weblate.trans.tasks import perform_update
 from weblate.trans.util import get_clean_env
 from weblate.utils import messages
+from weblate.utils.errors import report_error
 from weblate.utils.render import render_template
 from weblate.utils.validators import validate_filename
 
 
 class BaseAddon:
-    events = ()
+    events: Tuple[int, ...] = ()
     settings_form = None
-    name = None
+    name = ""
     compat = {}
     multiple = False
-    verbose = "Base addon"
-    description = "Base addon"
+    verbose = "Base add-on"
+    description = "Base add-on"
     icon = "cog.svg"
     project_scope = False
     repo_scope = False
     has_summary = False
-    alert = None
+    alert: Optional[str] = None
     trigger_update = False
+    stay_on_create = False
 
-    """Base class for Weblate addons."""
+    """Base class for Weblate add-ons."""
 
     def __init__(self, storage=None):
         self.instance = storage
@@ -72,9 +74,9 @@ class BaseAddon:
     def get_doc_anchor(cls):
         return "addon-{}".format(cls.name.replace(".", "-").replace("_", "-"))
 
-    @cached_property
-    def has_settings(self):
-        return self.settings_form is not None
+    @classmethod
+    def has_settings(cls):
+        return cls.settings_form is not None
 
     @classmethod
     def get_identifier(cls):
@@ -88,8 +90,8 @@ class BaseAddon:
             # Reallocate to repository
             if cls.repo_scope and component.linked_component:
                 component = component.linked_component
-            # Clear addon cache
-            component.addons_cache = None
+            # Clear add-on cache
+            component.drop_addons_cache()
         return Addon(
             component=component,
             name=cls.name,
@@ -107,23 +109,26 @@ class BaseAddon:
         return result
 
     @classmethod
-    def get_add_form(cls, component, **kwargs):
-        """Return configuration form for adding new addon."""
+    def get_add_form(cls, user, component, **kwargs):
+        """Return configuration form for adding new add-on."""
         if cls.settings_form is None:
             return None
         storage = cls.create_object(component)
         instance = cls(storage)
         # pylint: disable=not-callable
-        return cls.settings_form(instance, **kwargs)
+        return cls.settings_form(user, instance, **kwargs)
 
-    def get_settings_form(self, **kwargs):
-        """Return configuration for for this addon."""
+    def get_settings_form(self, user, **kwargs):
+        """Return configuration form for this add-on."""
         if self.settings_form is None:
             return None
         if "data" not in kwargs:
             kwargs["data"] = self.instance.configuration
         # pylint: disable=not-callable
-        return self.settings_form(self, **kwargs)
+        return self.settings_form(user, self, **kwargs)
+
+    def get_ui_form(self):
+        return self.get_settings_form(None)
 
     def configure(self, settings):
         """Save configuration."""
@@ -132,93 +137,117 @@ class BaseAddon:
         self.post_configure()
 
     def post_configure(self):
+        component = self.instance.component
+
         # Configure events to current status
+        component.log_debug("configuring events for %s add-on", self.name)
         self.instance.configure_events(self.events)
 
         # Trigger post events to ensure direct processing
-        if self.project_scope:
-            components = self.instance.component.project.component_set.all()
-        elif self.repo_scope:
-            if self.instance.component.linked_component:
-                root = self.instance.component.linked_component
-            else:
-                root = self.instance.component
-            components = [root] + list(root.linked_childs)
-        else:
-            components = [self.instance.component]
+        if self.repo_scope and component.linked_component:
+            component = component.linked_component
+
         if EVENT_POST_COMMIT in self.events:
-            for component in components:
-                self.post_commit(component)
+            component.log_debug("running post_commit add-on: %s", self.name)
+            self.post_commit(component)
         if EVENT_POST_UPDATE in self.events:
-            for component in components:
-                self.post_update(component, "")
+            component.log_debug("running post_update add-on: %s", self.name)
+            component.commit_pending("add-on", None)
+            self.post_update(component, "", False)
         if EVENT_COMPONENT_UPDATE in self.events:
-            for component in components:
-                self.component_update(component)
+            component.log_debug("running component_update add-on: %s", self.name)
+            self.component_update(component)
         if EVENT_POST_PUSH in self.events:
-            for component in components:
-                self.post_push(component)
+            component.log_debug("running post_push add-on: %s", self.name)
+            self.post_push(component)
         if EVENT_DAILY in self.events:
-            for component in components:
-                self.daily(component)
+            component.log_debug("running daily add-on: %s", self.name)
+            self.daily(component)
 
     def save_state(self):
-        """Save addon state information."""
+        """Save add-on state information."""
         self.instance.save(update_fields=["state"])
 
     @classmethod
     def can_install(cls, component, user):
-        """Check whether addon is compatible with given component."""
+        """Check whether add-on is compatible with given component."""
         for key, values in cls.compat.items():
             if getattr(component, key) not in values:
                 return False
         return True
 
     def pre_push(self, component):
+        """Hook triggered before repository is pushed upstream."""
         return
 
     def post_push(self, component):
+        """Hook triggered after repository is pushed upstream."""
         return
 
     def pre_update(self, component):
+        """Hook triggered before repository is updated from upstream."""
         return
 
-    def post_update(self, component, previous_head):
-        return
+    def post_update(self, component, previous_head: str, skip_push: bool):
+        """
+        Hook triggered after repository is updated from upstream.
 
-    def post_commit(self, component, translation=None):
+        :param str previous_head: HEAD of the repository prior to update, can
+                                  be blank on initial clone.
+        :param bool skip_push: Whether the add-on operation should skip pushing
+                               changes upstream. Usually you can pass this to
+                               underlying methods as ``commit_and_push`` or
+                               ``commit_pending``.
+        """
         return
 
     def pre_commit(self, translation, author):
+        """Hook triggered before changes are committed to the repository."""
+        return
+
+    def post_commit(self, component):
+        """Hook triggered after changes are committed to the repository."""
         return
 
     def post_add(self, translation):
+        """Hook triggered after new translation is added."""
         return
 
     def unit_pre_create(self, unit):
+        """Hook triggered before new unit is created."""
         return
 
     def store_post_load(self, translation, store):
+        """
+        Hook triggered after a file is parsed.
+
+        It receives an instance of a file format class as a argument.
+
+        This is useful to modify file format class parameters, for example
+        adjust how the file will be saved.
+        """
         return
 
     def daily(self, component):
+        """Hook triggered daily."""
         return
 
     def component_update(self, component):
         return
 
     def execute_process(self, component, cmd, env=None):
-        component.log_debug("%s addon exec: %s", self.name, " ".join(cmd))
+        component.log_debug("%s add-on exec: %s", self.name, " ".join(cmd))
         try:
             output = subprocess.check_output(
                 cmd,
                 env=get_clean_env(env),
                 cwd=component.full_path,
                 stderr=subprocess.STDOUT,
+                universal_newlines=True,
             )
-            component.log_debug("exec result: %s", output.decode())
+            component.log_debug("exec result: %s", output)
         except (OSError, subprocess.CalledProcessError) as err:
-            output = getattr(err, "output", b"").decode()
+            output = getattr(err, "output", "")
             component.log_error("failed to exec %s: %s", repr(cmd), err)
             for line in output.splitlines():
                 component.log_error("program output: %s", line)
@@ -230,6 +259,7 @@ class BaseAddon:
                     "error": str(err),
                 }
             )
+            report_error(cause="Add-on script error")
 
     def trigger_alerts(self, component):
         if self.alerts:
@@ -238,16 +268,9 @@ class BaseAddon:
         else:
             component.delete_alert(self.alert)
 
-    def get_commit_message(self, component):
-        return render_template(
-            component.addon_message,
-            # Compatibility with older
-            hook_name=self.verbose,
-            addon_name=self.verbose,
-            component=component,
-        )
-
-    def commit_and_push(self, component, files=None):
+    def commit_and_push(
+        self, component, files: Optional[List[str]] = None, skip_push: bool = False
+    ):
         if files is None:
             files = list(
                 chain.from_iterable(
@@ -258,9 +281,12 @@ class BaseAddon:
             files += self.extra_files
         repository = component.repository
         with repository.lock:
-            if repository.needs_commit():
-                repository.commit(self.get_commit_message(component), files=files)
-                component.push_if_needed(None)
+            component.commit_files(
+                template=component.addon_message,
+                extra_context={"addon_name": self.verbose},
+                files=files,
+                skip_push=skip_push,
+            )
 
     def render_repo_filename(self, template, translation):
         component = translation.component
@@ -308,16 +334,16 @@ class BaseAddon:
 
 
 class TestAddon(BaseAddon):
-    """Testing addong doing nothing."""
+    """Testing add-on doing nothing."""
 
     settings_form = BaseAddonForm
     name = "weblate.base.test"
-    verbose = "Test addon"
-    description = "Test addon"
+    verbose = "Test add-on"
+    description = "Test add-on"
 
 
 class UpdateBaseAddon(BaseAddon):
-    """Base class for addons updating translation files.
+    """Base class for add-ons updating translation files.
 
     It hooks to post update and commits all changed translations.
     """
@@ -328,17 +354,24 @@ class UpdateBaseAddon(BaseAddon):
         super().__init__(storage)
         self.extra_files = []
 
+    @staticmethod
+    def iterate_translations(component):
+        yield from (
+            translation
+            for translation in component.translation_set.iterator()
+            if not translation.is_source or component.intermediate
+        )
+
     def update_translations(self, component, previous_head):
         raise NotImplementedError()
 
-    def post_update(self, component, previous_head):
-        component.commit_pending("addon", None, skip_push=True)
+    def post_update(self, component, previous_head: str, skip_push: bool):
         try:
             self.update_translations(component, previous_head)
         except FileParseError:
             # Ignore file parse error, it will be properly tracked as an alert
             pass
-        self.commit_and_push(component)
+        self.commit_and_push(component, skip_push=skip_push)
 
 
 class TestException(Exception):
@@ -346,19 +379,23 @@ class TestException(Exception):
 
 
 class TestCrashAddon(UpdateBaseAddon):
-    """Testing addong doing nothing."""
+    """Testing add-on doing nothing."""
 
     name = "weblate.base.crash"
-    verbose = "Crash test addon"
-    description = "Crash test addon"
+    verbose = "Crash test add-on"
+    description = "Crash test add-on"
 
     def update_translations(self, component, previous_head):
         if previous_head:
             raise TestException("Test error")
 
+    @classmethod
+    def can_install(cls, component, user):
+        return False
+
 
 class StoreBaseAddon(BaseAddon):
-    """Base class for addons tweaking store."""
+    """Base class for add-ons tweaking store."""
 
     events = (EVENT_STORE_POST_LOAD,)
     icon = "wrench.svg"

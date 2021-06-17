@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -30,6 +30,7 @@ SUPPORTED_VCS = {
     "gerrit",
     "github",
     "gitlab",
+    "pagure",
     "subversion",
     "local",
     "git-force-push",

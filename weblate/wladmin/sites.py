@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,8 +21,6 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.admin import AdminSite
 from django.contrib.auth.views import LogoutView
-from django.contrib.sites.admin import SiteAdmin
-from django.contrib.sites.models import Site
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -33,12 +31,14 @@ from social_django.admin import AssociationOption, NonceOption, UserSocialAuthOp
 from social_django.models import Association, Nonce, UserSocialAuth
 
 from weblate.accounts.admin import AuditLogAdmin, ProfileAdmin, VerifiedEmailAdmin
-from weblate.accounts.forms import LoginForm
+from weblate.accounts.forms import AdminLoginForm
 from weblate.accounts.models import AuditLog, Profile, VerifiedEmail
 from weblate.auth.admin import RoleAdmin, WeblateGroupAdmin, WeblateUserAdmin
 from weblate.auth.models import Group, Role, User
 from weblate.checks.admin import CheckAdmin
 from weblate.checks.models import Check
+from weblate.configuration.admin import SettingAdmin
+from weblate.configuration.models import Setting
 from weblate.fonts.admin import FontAdmin, FontGroupAdmin
 from weblate.fonts.models import Font, FontGroup
 from weblate.lang.admin import LanguageAdmin
@@ -54,7 +54,6 @@ from weblate.trans.admin import (
     ComponentAdmin,
     ComponentListAdmin,
     ContributorAgreementAdmin,
-    DictionaryAdmin,
     ProjectAdmin,
     SuggestionAdmin,
     TranslationAdmin,
@@ -67,7 +66,6 @@ from weblate.trans.models import (
     Component,
     ComponentList,
     ContributorAgreement,
-    Dictionary,
     Project,
     Suggestion,
     Translation,
@@ -78,10 +76,11 @@ from weblate.wladmin.models import ConfigurationError
 
 
 class WeblateAdminSite(AdminSite):
-    login_form = LoginForm
+    login_form = AdminLoginForm
     site_header = _("Weblate administration")
     site_title = _("Weblate administration")
     index_template = "admin/weblate-index.html"
+    enable_nav_sidebar = False
 
     @property
     def site_url(self):
@@ -119,6 +118,9 @@ class WeblateAdminSite(AdminSite):
         self.register(ComponentList, ComponentListAdmin)
         self.register(ContributorAgreement, ContributorAgreementAdmin)
 
+        # Settings
+        self.register(Setting, SettingAdmin)
+
         # Show some controls only in debug mode
         if settings.DEBUG:
             self.register(Translation, TranslationAdmin)
@@ -126,14 +128,13 @@ class WeblateAdminSite(AdminSite):
             self.register(Suggestion, SuggestionAdmin)
             self.register(Comment, CommentAdmin)
             self.register(Check, CheckAdmin)
-            self.register(Dictionary, DictionaryAdmin)
             self.register(Change, ChangeAdmin)
 
         # Billing
         if "weblate.billing" in settings.INSTALLED_APPS:
             # pylint: disable=wrong-import-position
-            from weblate.billing.admin import PlanAdmin, BillingAdmin, InvoiceAdmin
-            from weblate.billing.models import Plan, Billing, Invoice
+            from weblate.billing.admin import BillingAdmin, InvoiceAdmin, PlanAdmin
+            from weblate.billing.models import Billing, Invoice, Plan
 
             self.register(Plan, PlanAdmin)
             self.register(Billing, BillingAdmin)
@@ -159,8 +160,8 @@ class WeblateAdminSite(AdminSite):
         # SAML identity provider
         if "djangosaml2idp" in settings.INSTALLED_APPS:
             # pylint: disable=wrong-import-position
-            from djangosaml2idp.models import PersistentId, ServiceProvider
             from djangosaml2idp.admin import PersistentIdAdmin, ServiceProviderAdmin
+            from djangosaml2idp.models import PersistentId, ServiceProvider
 
             self.register(PersistentId, PersistentIdAdmin)
             self.register(ServiceProvider, ServiceProviderAdmin)
@@ -173,13 +174,10 @@ class WeblateAdminSite(AdminSite):
         # Django REST Framework
         self.register(Token, TokenAdmin)
 
-        # Django core
-        self.register(Site, SiteAdmin)
-
         # Simple SSO
         if "simple_sso.sso_server" in settings.INSTALLED_APPS:
-            from simple_sso.sso_server.server import ConsumerAdmin
             from simple_sso.sso_server.models import Consumer
+            from simple_sso.sso_server.server import ConsumerAdmin
 
             self.register(Consumer, ConsumerAdmin)
 

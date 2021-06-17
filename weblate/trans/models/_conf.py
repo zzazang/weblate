@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,11 +17,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import os.path
 
 from appconf import AppConf
-from django.conf import settings
 
 
 class WeblateConf(AppConf):
@@ -29,13 +27,16 @@ class WeblateConf(AppConf):
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # Data directory
-    DATA_DIR = os.path.join(settings.BASE_DIR, "data")
+    DATA_DIR = os.path.join(BASE_DIR, "data")
 
     # Akismet API key
     AKISMET_API_KEY = None
 
     # Title of site to use
     SITE_TITLE = "Weblate"
+
+    # Site domain
+    SITE_DOMAIN = ""
 
     # Whether this is hosted.weblate.org
     OFFER_HOSTING = False
@@ -46,8 +47,11 @@ class WeblateConf(AppConf):
     # Enable sharing
     ENABLE_SHARING = True
 
+    # Default number of elements to display when pagination is active
+    DEFAULT_PAGE_LIMIT = 100
+
     # Number of nearby messages to show in each direction
-    NEARBY_MESSAGES = 5
+    NEARBY_MESSAGES = 15
 
     # Minimal number of similar messages to show
     SIMILAR_MESSAGES = 5
@@ -74,6 +78,9 @@ class WeblateConf(AppConf):
     # Google Analytics
     GOOGLE_ANALYTICS_ID = None
 
+    # Link for support portal
+    GET_HELP_URL = None
+
     # URL with status monitoring
     STATUS_URL = None
 
@@ -89,12 +96,6 @@ class WeblateConf(AppConf):
     # Hiding repository credentials
     HIDE_REPO_CREDENTIALS = True
 
-    # GitHub username for sending pull requests
-    GITHUB_USERNAME = None
-
-    # GitLab username for sending merge requests
-    GITLAB_USERNAME = None
-
     # Default committer
     DEFAULT_COMMITER_EMAIL = "noreply@weblate.org"
     DEFAULT_COMMITER_NAME = "Weblate"
@@ -103,9 +104,11 @@ class WeblateConf(AppConf):
     DEFAULT_MERGE_STYLE = "rebase"
 
     DEFAULT_ACCESS_CONTROL = 0
+    DEFAULT_RESTRICTED_COMPONENT = False
     DEFAULT_SHARED_TM = True
 
     DEFAULT_PUSH_ON_COMMIT = True
+    DEFAULT_AUTO_LOCK_ERROR = True
     DEFAULT_VCS = "git"
     DEFAULT_COMMIT_MESSAGE = (
         "Translated using Weblate ({{ language_name }})\n\n"
@@ -135,6 +138,17 @@ Translate-URL: {{ url }}"""
     DEFAULT_PULL_MESSAGE = """Translations update from Weblate
 
 Translations update from [Weblate]({{url}}) for {{ project_name }}/{{ component_name }}.
+
+{% if component.linked_childs %}
+It also includes following components:
+{% for linked in component.linked_child %}
+{{ component.project.name }}/{{ component.name }}
+{% endfor %}
+{% endif %}
+
+Current translation status:
+
+![Weblate translation status]({{widget_url}})
 """
 
     # Billing
@@ -158,18 +172,20 @@ Translations update from [Weblate]({{url}}) for {{ project_name }}/{{ component_
     ADMINS_BILLING = []
 
     # Special chars for visual keyboard
-    SPECIAL_CHARS = ("\t", "\n", "…")
+    SPECIAL_CHARS = ("\t", "\n", "\u00a0", "…")
 
     DEFAULT_ADDONS = {}
 
     SUGGESTION_CLEANUP_DAYS = None
     COMMENT_CLEANUP_DAYS = None
     REPOSITORY_ALERT_THRESHOLD = 25
+    BACKGROUND_TASKS = "monthly"
 
     SINGLE_PROJECT = False
     LICENSE_EXTRA = []
     LICENSE_FILTER = None
     LICENSE_REQUIRED = False
+    WEBSITE_REQUIRED = True
     FONTS_CDN_URL = None
 
     class Meta:

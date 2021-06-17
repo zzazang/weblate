@@ -20,7 +20,7 @@ URL.
 .. versionchanged:: 2.13
 
     Change dashboard settings for anonymous users from the admin interface,
-    altering whatdashboard is presented to unauthenticated users.
+    altering what dashboard is presented to unauthenticated users.
 
 Automatic component lists
 -------------------------
@@ -30,7 +30,8 @@ Automatic component lists
 Add components to the list automatically based on their slug by creating
 :guilabel:`Automatic component list assignment` rules.
 
-* Useful for maintaining component lists for large installations or in case
+* Useful for maintaining component lists for large installations, or in case
+  you want to have one component list with all components on your Weblate installation.
 
 .. hint::
 
@@ -39,5 +40,5 @@ Add components to the list automatically based on their slug by creating
 1. Define :guilabel:`Automatic component list assignment` with ``^.*$`` as regular expression
 in both the project and the component fields, as shown on this image:
 
-.. image:: /images/componentlist-add.png
-   :alt: Image showing the Weblate aministration panel with the above configuration filled in.
+.. image:: /screenshots/componentlist-add.png
+   :alt: Image showing the Weblate administration panel with the above configuration filled in.

@@ -7,9 +7,12 @@
     contributing/code
     contributing/debugging
     contributing/internals
+    contributing/addons
+    contributing/frontend
     contributing/issues
     contributing/tests
     contributing/schemas
     contributing/release
+    contributing/security
     contributing/about
     contributing/license

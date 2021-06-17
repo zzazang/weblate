@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -23,7 +23,7 @@
 from weblate.checks.flags import Flags
 from weblate.checks.models import Check
 from weblate.checks.placeholders import PlaceholderCheck, RegexCheck
-from weblate.checks.tests.test_checks import CheckTestCase
+from weblate.checks.tests.test_checks import CheckTestCase, MockUnit
 from weblate.trans.models import Unit
 
 
@@ -54,7 +54,17 @@ class PlaceholdersTest(CheckTestCase):
         check = Check(unit=unit)
         self.assertEqual(
             self.check.get_description(check),
-            "Translation is missing some placeholders: $URL$",
+            "Following format strings are missing: $URL$",
+        )
+
+    def test_regexp(self):
+        unit = Unit(source="string $URL$", target="string $FOO$")
+        unit.__dict__["all_flags"] = Flags(r"""placeholders:r"\$[^$]*\$" """)
+        check = Check(unit=unit)
+        self.assertEqual(
+            self.check.get_description(check),
+            "Following format strings are missing: $URL$"
+            "<br />Following format strings are extra: $FOO$",
         )
 
 
@@ -81,4 +91,20 @@ class RegexTest(CheckTestCase):
         self.assertEqual(
             self.check.get_description(check),
             "Translation does not match regular expression: <code>URL</code>",
+        )
+
+    def test_check_highlight_groups(self):
+        unit = MockUnit(
+            None,
+            r'regex:"((?:@:\(|\{)[^\)\}]+(?:\)|\}))"',
+            self.default_lang,
+            "@:(foo.bar.baz) | @:(hello.world) | {foo32}",
+        )
+        self.assertEqual(
+            self.check.check_highlight(unit.source, unit),
+            [
+                (0, 15, "@:(foo.bar.baz)"),
+                (18, 33, "@:(hello.world)"),
+                (36, 43, "{foo32}"),
+            ],
         )

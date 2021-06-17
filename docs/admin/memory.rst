@@ -1,3 +1,4 @@
+.. _memory:
 .. _translation-memory:
 
 Translation Memory
@@ -59,7 +60,7 @@ Shared translation memory
 All translation within projects with shared translation memory turned on
 are stored in a shared translation memory available to all projects.
 
-Please consider carefully whether to turn this this feature on for shared Weblate
+Please consider carefully whether to turn this feature on for shared Weblate
 installations, as it can have severe implications:
 
 * The translations can be used by anybody else.
@@ -76,7 +77,7 @@ User interface
 .. versionadded:: 3.2
 
 In the basic user interface you can manage per user and per project translation
-memories. It can be used to download or import translation memory.
+memories. It can be used to download, wipe or import translation memory.
 
 .. hint::
 
@@ -87,7 +88,7 @@ memories. It can be used to download or import translation memory.
 
     :ref:`schema-memory`
 
-.. image:: /images/memory.png
+.. image:: /screenshots/memory.png
 
 Management interface
 ++++++++++++++++++++

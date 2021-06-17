@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -16,7 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 
 from django.conf import settings
 
@@ -72,11 +71,20 @@ class MyMemoryTranslation(MachineTranslation):
 
         return result
 
-    def download_translations(self, source, language, text, unit, user, search):
+    def download_translations(
+        self,
+        source,
+        language,
+        text: str,
+        unit,
+        user,
+        search: bool,
+        threshold: int = 75,
+    ):
         """Download list of possible translations from MyMemory."""
         args = {
             "q": text.split(". ")[0][:500],
-            "langpair": "{0}|{1}".format(source, language),
+            "langpair": f"{source}|{language}",
         }
         if settings.MT_MYMEMORY_EMAIL is not None:
             args["de"] = settings.MT_MYMEMORY_EMAIL

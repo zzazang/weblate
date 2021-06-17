@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -20,16 +20,17 @@
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils.decorators import method_decorator
-from django.utils.encoding import force_str
 from django.utils.translation import gettext as _
 from django.views.generic.base import TemplateView
 
-from weblate.memory.forms import UploadForm
+from weblate.memory.forms import DeleteForm, UploadForm
 from weblate.memory.models import Memory, MemoryImportError
+from weblate.metrics.models import Metric
 from weblate.utils import messages
 from weblate.utils.views import ErrorFormView, get_project
 from weblate.wladmin.views import MENU
@@ -59,11 +60,28 @@ def check_perm(user, permission, objects):
 @method_decorator(login_required, name="dispatch")
 class MemoryFormView(ErrorFormView):
     def get_success_url(self):
+        if "manage" in self.kwargs:
+            return reverse("manage-memory")
         return reverse("memory", kwargs=self.kwargs)
 
     def dispatch(self, request, *args, **kwargs):
         self.objects = get_objects(request, kwargs)
         return super().dispatch(request, *args, **kwargs)
+
+
+class DeleteView(MemoryFormView):
+
+    form_class = DeleteForm
+
+    def form_valid(self, form):
+        if not check_perm(self.request.user, "memory.delete", self.objects):
+            raise PermissionDenied()
+        entries = Memory.objects.filter_type(**self.objects)
+        if "origin" in self.request.POST:
+            entries = entries.filter(origin=self.request.POST["origin"])
+        entries.delete()
+        messages.success(self.request, _("Entries deleted."))
+        return super().form_valid(form)
 
 
 class UploadView(MemoryFormView):
@@ -80,7 +98,7 @@ class UploadView(MemoryFormView):
                 self.request, _("File processed, the entries will appear shortly.")
             )
         except MemoryImportError as error:
-            messages.error(self.request, force_str(error))
+            messages.error(self.request, str(error))  # noqa: G200
         return super().form_valid(form)
 
 
@@ -93,6 +111,8 @@ class MemoryView(TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_url(self, name):
+        if "manage" in self.kwargs:
+            return reverse(f"manage-{name}")
         return reverse(name, kwargs=self.kwargs)
 
     def get_context_data(self, **kwargs):
@@ -100,10 +120,17 @@ class MemoryView(TemplateView):
         context.update(self.objects)
         entries = Memory.objects.filter_type(**self.objects)
         context["num_entries"] = entries.count()
-        context["total_entries"] = Memory.objects.all().count()
+        context["entries_origin"] = (
+            entries.values("origin").order_by("origin").annotate(Count("id"))
+        )
+        context["total_entries"] = Metric.objects.get_current(
+            None, Metric.SCOPE_GLOBAL, 0, name="memory"
+        )["memory"]
         context["upload_url"] = self.get_url("memory-upload")
         context["download_url"] = self.get_url("memory-download")
         user = self.request.user
+        if check_perm(user, "memory.delete", self.objects):
+            context["delete_url"] = self.get_url("memory-delete")
         if check_perm(user, "memory.edit", self.objects):
             context["upload_form"] = UploadForm()
         if "from_file" in self.objects:
@@ -120,6 +147,8 @@ class DownloadView(MemoryView):
     def get(self, request, *args, **kwargs):
         fmt = request.GET.get("format", "json")
         data = Memory.objects.filter_type(**self.objects).prefetch_lang()
+        if "origin" in request.GET:
+            data = data.filter(origin=request.GET["origin"])
         if "from_file" in self.objects and "kind" in request.GET:
             if request.GET["kind"] == "shared":
                 data = Memory.objects.filter_type(use_shared=True).prefetch_lang()

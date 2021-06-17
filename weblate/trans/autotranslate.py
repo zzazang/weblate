@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,6 +17,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
+from typing import List, Optional
+
 from celery import current_task
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -27,49 +29,67 @@ from weblate.utils.state import STATE_FUZZY, STATE_TRANSLATED
 
 
 class AutoTranslate:
-    def __init__(self, user, translation, filter_type, mode):
+    def __init__(
+        self,
+        user,
+        translation,
+        filter_type: str,
+        mode: str,
+        component_wide: bool = False,
+    ):
         self.user = user
         self.translation = translation
+        translation.component.batch_checks = True
         self.filter_type = filter_type
         self.mode = mode
         self.updated = 0
-        self.total = 0
+        self.progress_steps = 0
         self.target_state = STATE_FUZZY if mode == "fuzzy" else STATE_TRANSLATED
+        self.component_wide = component_wide
 
-    def get_units(self):
+    def get_units(self, filter_mode=True):
         units = self.translation.unit_set.all()
-        if self.mode == "suggest":
+        if self.mode == "suggest" and filter_mode:
             units = units.filter(suggestion__isnull=True)
-        return units.filter_type(self.filter_type).prefetch()
+        return units.filter_type(self.filter_type)
 
     def set_progress(self, current):
-        if current_task and current_task.request.id and self.total:
+        if current_task and current_task.request.id and self.progress_steps:
             current_task.update_state(
-                state="PROGRESS", meta={"progress": 100 * current // self.total}
+                state="PROGRESS",
+                meta={
+                    "progress": 100 * current // self.progress_steps,
+                    "translation": self.translation.pk,
+                },
             )
 
     def update(self, unit, state, target):
-        if self.mode == "suggest":
+        if self.mode == "suggest" or len(target) > unit.get_max_length():
             Suggestion.objects.add(unit, target, None, False)
         else:
-            unit.translate(self.user, target, state, Change.ACTION_AUTO, False)
+            unit.is_batch_update = True
+            unit.translate(
+                self.user, target, state, Change.ACTION_AUTO, propagate=False
+            )
         self.updated += 1
 
     def post_process(self):
         if self.updated > 0:
+            if not self.component_wide:
+                self.translation.component.update_source_checks()
+                self.translation.component.run_batched_checks()
             self.translation.invalidate_cache()
             if self.user:
-                self.user.profile.refresh_from_db()
-                self.user.profile.translated += self.updated
-                self.user.profile.save(update_fields=["translated"])
+                self.user.profile.increase_count("translated", self.updated)
 
     @transaction.atomic
-    def process_others(self, source):
+    def process_others(self, source: Optional[int]):
         """Perform automatic translation based on other components."""
         kwargs = {
             "translation__language": self.translation.language,
             "state__gte": STATE_TRANSLATED,
         }
+        source_language = self.translation.component.source_language
         exclude = {}
         if source:
             component = Component.objects.get(id=source)
@@ -77,99 +97,102 @@ class AutoTranslate:
             if (
                 not component.project.contribute_shared_tm
                 and not component.project != self.translation.component.project
-            ):
+            ) or component.source_language != source_language:
                 raise PermissionDenied()
             kwargs["translation__component"] = component
         else:
             project = self.translation.component.project
             kwargs["translation__component__project"] = project
+            kwargs["translation__component__source_language"] = source_language
             exclude["translation"] = self.translation
         sources = Unit.objects.filter(**kwargs)
         if exclude:
             sources = sources.exclude(**exclude)
 
-        # Filter by strings
-        units = set(
-            self.get_units()
-            .filter(source__in=sources.values("source"))
-            .values_list("id", flat=True)
-        )
-        self.total = len(units)
+        # Fetch translations
+        translations = {
+            source: (state, target)
+            for source, state, target in sources.filter(
+                source__in=self.get_units().values("source")
+            ).values_list("source", "state", "target")
+        }
 
-        for pos, unit in enumerate(
-            Unit.objects.filter(id__in=units).select_for_update()
-        ):
-            # Get first matching entry
-            update = sources.filter(source=unit.source)[0]
-            # No save if translation is same
-            if unit.state == update.state and unit.target == update.target:
+        # We need to skip mode (suggestions) filtering here as SELECT FOR UPDATE
+        # cannot be used with JOIN
+        units = (
+            self.get_units(False)
+            .filter(source__in=translations.keys())
+            .prefetch_bulk()
+            .select_for_update()
+        )
+        self.progress_steps = len(units)
+
+        for pos, unit in enumerate(units):
+            # Get update
+            try:
+                state, target = translations[unit.source]
+            except KeyError:
+                # Happens on MySQL due to case-insensitive lookup
+                continue
+
+            self.set_progress(pos)
+
+            # No save if translation is same or unit does not exist
+            if unit.state == state and unit.target == target:
                 continue
             # Copy translation
-            self.update(unit, update.state, update.target)
-            self.set_progress(pos / 2)
+            self.update(unit, state, target)
 
         self.post_process()
 
     def fetch_mt(self, engines, threshold):
         """Get the translations."""
-        translations = {}
+        units = self.get_units()
+        num_units = len(units)
 
-        for pos, unit in enumerate(self.get_units()):
-            # a list to store all found translations
-            max_quality = threshold - 1
-            translation = None
+        engines = sorted(
+            (engine for engine in engines if engine in MACHINE_TRANSLATION_SERVICES),
+            key=lambda x: MACHINE_TRANSLATION_SERVICES[x].get_rank(),
+            reverse=True,
+        )
 
-            # Run engines with higher maximal score first
-            engines = sorted(
-                engines,
-                key=lambda x: MACHINE_TRANSLATION_SERVICES[x].get_rank(),
-                reverse=True,
-            )
-            for engine in engines:
-                translation_service = MACHINE_TRANSLATION_SERVICES[engine]
+        self.progress_steps = 2 * (len(engines) + num_units)
 
-                # Skip service if it can not provide better results.
-                # Typically we skip machine translation when we have
-                # a terminology match.
-                if max_quality >= translation_service.max_score:
-                    continue
+        for pos, engine in enumerate(engines):
+            translation_service = MACHINE_TRANSLATION_SERVICES[engine]
+            batch_size = translation_service.batch_size
 
-                result = translation_service.translate(unit, self.user)
+            for batch_start in range(0, num_units, batch_size):
+                translation_service.batch_translate(
+                    units[batch_start : batch_start + batch_size],
+                    self.user,
+                    threshold=threshold,
+                )
+                self.set_progress(pos * num_units + batch_start)
 
-                for item in result:
-                    if item["quality"] > max_quality:
-                        max_quality = item["quality"]
-                        translation = item["text"]
+        return {
+            unit.id: unit.machinery["translation"]
+            for unit in units
+            if unit.machinery["best"] >= threshold
+        }
 
-                # Break if we can't get better match
-                if max_quality == 100:
-                    break
-
-            if translation is None:
-                continue
-
-            translations[unit.pk] = translation
-            self.set_progress(pos / 2)
-
-        return translations
-
-    def process_mt(self, engines, threshold):
+    def process_mt(self, engines: List[str], threshold: int):
         """Perform automatic translation based on machine translation."""
-        units = set(self.get_units().values_list("id", flat=True))
-        self.total = len(units)
         translations = self.fetch_mt(engines, int(threshold))
+
+        # Adjust total number to show correct progress
+        offset = self.progress_steps / 2
+        self.progress_steps = offset + len(translations)
 
         with transaction.atomic():
             # Perform the translation
             for pos, unit in enumerate(
-                Unit.objects.filter(id__in=units).select_for_update()
+                self.translation.unit_set.filter(id__in=translations.keys())
+                .prefetch_bulk()
+                .select_for_update()
             ):
                 # Copy translation
-                try:
-                    self.update(unit, self.target_state, translations[unit.pk])
-                except KeyError:
-                    # Probably new unit, ignore it for now
-                    continue
-                self.set_progress((self.total / 2) + (pos / 2))
+                self.update(unit, self.target_state, translations[unit.pk])
+                self.set_progress(offset + pos)
 
             self.post_process()

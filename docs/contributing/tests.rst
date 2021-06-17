@@ -38,7 +38,8 @@ The simple execution can look like:
    ./ci/run-migrate
    ./ci/run-test
    ./ci/run-docs
-   ./ci/run-setup
+
+.. _local-tests:
 
 Local testing
 +++++++++++++
@@ -63,7 +64,7 @@ The :file:`weblate/settings_test.py` is used in CI environment as well (see
 .. literalinclude:: ../../scripts/test-database
    :language: sh
 
-Prior to runinng tests you should collect static files as some tests rely on them being present:
+Prior to running tests you should collect static files as some tests rely on them being present:
 
 .. code-block:: sh
 

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -25,7 +25,7 @@ from weblate.trans.mixins import UserDisplayMixin
 from weblate.trans.models.change import Change
 from weblate.utils.antispam import report_spam
 from weblate.utils.fields import JSONField
-from weblate.utils.request import get_ip_address
+from weblate.utils.request import get_ip_address, get_user_agent_raw
 
 
 class CommentManager(models.Manager):
@@ -39,10 +39,11 @@ class CommentManager(models.Manager):
             unit=unit,
             comment=text,
             userdetails={
-                "address": get_ip_address(request) if request else "",
-                "agent": request.META.get("HTTP_USER_AGENT", "") if request else "",
+                "address": get_ip_address(request),
+                "agent": get_user_agent_raw(request),
             },
         )
+        user.profile.increase_count("commented")
         Change.objects.create(
             unit=unit,
             comment=new_comment,
@@ -72,7 +73,6 @@ class Comment(models.Model, UserDisplayMixin):
     userdetails = JSONField()
 
     objects = CommentManager.from_queryset(CommentQuerySet)()
-    weblate_unsafe_delete = True
 
     class Meta:
         app_label = "trans"
@@ -80,7 +80,7 @@ class Comment(models.Model, UserDisplayMixin):
         verbose_name_plural = "string comments"
 
     def __str__(self):
-        return "comment for {0} by {1}".format(
+        return "comment for {} by {}".format(
             self.unit, self.user.username if self.user else "unknown"
         )
 

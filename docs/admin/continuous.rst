@@ -7,6 +7,11 @@ There is infrastructure in place so that your translation closely follows
 development. This way translators can work on translations the entire time,
 instead of working through huge amount of new text just prior to release.
 
+.. seealso::
+
+   :doc:`/devel/integration` describes basic ways to integrate your development
+   with Weblate.
+
 This is the process:
 
 1. Developers make changes and push them to the VCS repository.
@@ -19,12 +24,12 @@ This is the process:
 .. graphviz::
 
     digraph translations {
-        graph [fontname = "sans-serif"];
-        node [fontname = "sans-serif"];
-        edge [fontname = "sans-serif"];
+        graph [fontname = "sans-serif", fontsize=10];
+        node [fontname = "sans-serif", fontsize=10, margin=0.1, height=0];
+        edge [fontname = "sans-serif", fontsize=10];
 
-        "Developers" [shape=box, fillcolor=seagreen, fontcolor=white, style=filled];
-        "Translators" [shape=box, fillcolor=seagreen, fontcolor=white, style=filled];
+        "Developers" [shape=box, fillcolor="#144d3f", fontcolor=white, style=filled];
+        "Translators" [shape=box, fillcolor="#144d3f", fontcolor=white, style=filled];
 
         "Developers" -> "VCS repository" [label=" 1. Push "];
 
@@ -47,12 +52,21 @@ Updating repositories
 You should set up some way of updating backend repositories from their
 source.
 
-* Use :ref:`hooks` to integrate with most of common code hosting services
-* Manually trigger update either in the repository management or using :ref:`api` or :ref:`wlc`
-* Enable :setting:`AUTO_UPDATE` to automatically update all components on your Weblate instance
-* Execute :djadmin:`updategit` (with selection of project or `--all` to update all)
+* Use :ref:`hooks` to integrate with most of common code hosting services:
 
-Whenever Weblate updates the repository, the post update addons will be
+  * :ref:`github-setup`
+  * :ref:`gitlab-setup`
+  * :ref:`bitbucket-setup`
+  * :ref:`pagure-setup`
+  * :ref:`azure-setup`
+
+* Manually trigger update either in the repository management or using :ref:`api` or :ref:`wlc`
+
+* Enable :setting:`AUTO_UPDATE` to automatically update all components on your Weblate instance
+
+* Execute :djadmin:`updategit` (with selection of project or ``--all`` to update all)
+
+Whenever Weblate updates the repository, the post-update addons will be
 triggered, see :ref:`addons`.
 
 .. _avoid-merge-conflicts:
@@ -114,6 +128,10 @@ all separately:
     The example uses :ref:`wlc`, which needs configuration (API keys) to be
     able to control Weblate remotely. You can also achieve this using any HTTP
     client instead of wlc, e.g. curl, see :ref:`api`.
+
+.. seealso::
+
+   :ref:`wlc`
 
 .. _github-setup:
 
@@ -206,7 +224,7 @@ settings`.
 
 .. seealso::
 
-   `Web hooks in Azure DevOps manual <https://docs.microsoft.com/en-us/azure/devops/service-hooks/services/webhooks>`_,
+   `Web hooks in Azure DevOps manual <https://docs.microsoft.com/en-us/azure/devops/service-hooks/services/webhooks?view=azure-devops>`_,
    :http:post:`/hooks/azure/`, :ref:`hosted-push`
 
 .. _gitea-setup:
@@ -252,8 +270,8 @@ nightly merges as well, by enabling :setting:`AUTO_UPDATE`.
 
 .. _push-changes:
 
-Pushing changes
----------------
+Pushing changes from Weblate
+----------------------------
 
 Each translation component can have a push URL set up (see
 :ref:`component-push`), and in that case Weblate will be able to push change to
@@ -265,9 +283,37 @@ under :guilabel:`Repository maintenance` or using API via :option:`wlc push`.
 The push options differ based on the :ref:`vcs` used, more details are found in that chapter.
 
 In case you do not want direct pushes by Weblate, there is support for
-:ref:`vcs-github`, :ref:`vcs-gitlab` pull requests or :ref:`vcs-gerrit`
-reviews, you can activate these by choosing :guilabel:`GitHub`,
-:guilabel:`GitLab` or :guilabel:`Gerrit` as :ref:`component-vcs` in :ref:`component`.
+:ref:`vcs-github`, :ref:`vcs-gitlab`, :ref:`vcs-pagure` pull requests or
+:ref:`vcs-gerrit` reviews, you can activate these by choosing
+:guilabel:`GitHub`, :guilabel:`GitLab`, :guilabel:`Gerrit` or
+:guilabel:`Pagure` as :ref:`component-vcs` in :ref:`component`.
+
+Overall, following options are available with Git, GitHub and GitLab:
+
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Desired setup                     | :ref:`component-vcs`          | :ref:`component-push`         | :ref:`component-push_branch`  |
++===================================+===============================+===============================+===============================+
+| No push                           | :ref:`vcs-git`                | `empty`                       | `empty`                       |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Push directly                     | :ref:`vcs-git`                | SSH URL                       | `empty`                       |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Push to separate branch           | :ref:`vcs-git`                | SSH URL                       | Branch name                   |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| GitHub pull request from fork     | :ref:`vcs-github`             | `empty`                       | `empty`                       |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| GitHub pull request from branch   | :ref:`vcs-github`             | SSH URL [#empty]_             | Branch name                   |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| GitLab merge request from fork    | :ref:`vcs-gitlab`             | `empty`                       | `empty`                       |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| GitLab merge request from branch  | :ref:`vcs-gitlab`             | SSH URL [#empty]_             | Branch name                   |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Pagure merge request from fork    | :ref:`vcs-pagure`             | `empty`                       | `empty`                       |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+| Pagure merge request from branch  | :ref:`vcs-pagure`             | SSH URL [#empty]_             | Branch name                   |
++-----------------------------------+-------------------------------+-------------------------------+-------------------------------+
+
+.. [#empty] Can be empty in case :ref:`component-repo` supports pushing.
+
 
 .. note::
 
@@ -284,7 +330,7 @@ Protected branches
 
 If you are using Weblate on protected branch, you can configure it to use pull
 requests and perform actual review on the translations (what might be
-problematic for languages you do not know). Alternative approach is to to waive
+problematic for languages you do not know). An alternative approach is to waive
 this limitation for the Weblate push user.
 
 For example on GitHub this can be done in the repository configuration:
@@ -299,7 +345,7 @@ Merge or rebase
 By default, Weblate merges the upstream repository into its own. This is the safest way
 in case you also access the underlying repository by other means. In case you don't
 need this, you can enable rebasing of changes on upstream, which will produce
-history with fewer merge commits.
+a history with fewer merge commits.
 
 .. note::
 
@@ -323,7 +369,7 @@ Lazy commits
 The behaviour of Weblate is to group commits from the same author into one
 commit if possible. This greatly reduces the number of commits, however you
 might need to explicitly tell it to do the commits in case you want to get the
-VCS repository in sync, e.g. for merge (this is by default allowed for the Managers
+VCS repository in sync, e.g. for merge (this is by default allowed for the :guilabel:`Managers`
 group, see :ref:`privileges`).
 
 The changes in this mode are committed once any of the following conditions are
@@ -332,7 +378,7 @@ fulfilled:
 * Somebody else changes an already changed string.
 * A merge from upstream occurs.
 * An explicit commit is requested.
-* Change is older than period defined as :guilabel:`Age of changes to commit` on :ref:`component`.
+* Change is older than period defined as :ref:`component-commit_pending_age` on :ref:`component`.
 
 .. hint::
 
@@ -345,7 +391,6 @@ can schedule a regular task to perform a commit:
 
 .. literalinclude:: ../../weblate/examples/beat-settings.py
     :language: python
-    :encoding: utf-8
 
 .. _processing:
 

@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -34,7 +34,13 @@ def find_git_http_backend():
         return find_git_http_backend.result
 
     try:
-        path = subprocess.check_output(["git", "--exec-path"]).decode().strip()
+        path = subprocess.run(
+            ["git", "--exec-path"],
+            universal_newlines=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.strip()
         if path:
             GIT_PATHS.insert(0, path)
     except OSError:

@@ -3,7 +3,9 @@
 Translation workflows
 =====================
 
-Several translation workflows are supported.
+Using Weblate is a process that brings your users closer to you, by bringing
+you closer to your translators.  It is up to you to decide how many of its
+features you want to make use of.
 
 The following is not a complete list of ways to configure Weblate.
 You can base other workflows on the most usual examples listed here.
@@ -11,8 +13,10 @@ You can base other workflows on the most usual examples listed here.
 Translation access
 ------------------
 
-The :ref:`privileges` is not much discussed in the workflows as each access control option can be applied to any workflow. Please consult that
-documentation for information on how to manage access to translations.
+The :ref:`access control <access-control>` is not discussed in detail as a whole in
+the workflows, as most of its options can be applied to any workflow. Please
+consult the respective documentation on how to manage access to
+translations.
 
 In the following chapters, *any user* means a user who has access to the
 translation. It can be any authenticated user if the project is public, or a user
@@ -29,9 +33,9 @@ Untranslated
     Translation is empty, it might or not be stored in the file, depending
     on the file format.
 Needs editing
-    Translation needs editing, this is usually the result of a source string change.
+    Translation needs editing, this is usually the result of a source string change, fuzzy matching or translator action.
     The translation is stored in the file, depending on the file format it might
-    be marked as needing edit (for example as it gets a fuzzy flag).
+    be marked as needing edit (for example as it gets a ``fuzzy`` flag in the Gettext file).
 Waiting for review
     Translation is made, but not reviewed. It is stored in the file as a valid
     translation.
@@ -41,6 +45,19 @@ Approved
     it.
 Suggestions
     Suggestions are stored in Weblate only and not in the translation file.
+
+The states are represented in the translation files when possible.
+
+.. hint::
+
+   In case file format you use does not support storing states, you might want
+   to use :ref:`addon-weblate.flags.same_edit` addon to flag unchanged strings
+   as needing editing.
+
+.. seealso::
+
+   :ref:`fmt_capabs`,
+   :ref:`workflows`
 
 
 Direct translation
@@ -52,22 +69,24 @@ This is also the default setup in Weblate.
 * Suggestions are optional ways to suggest changes, when translators are not
   sure about the change.
 
-+------------------------+------------+-------------------------------------+
-| Setting                |   Value    |   Note                              |
-+========================+============+=====================================+
-| Enable reviews         | Off        | Configured at project level.        |
-+------------------------+------------+-------------------------------------+
-| Enable suggestions     | On         | It is useful for users to be able to|
-|                        |            | suggest when they are not sure.     |
-+------------------------+------------+-------------------------------------+
-| Suggestion voting      | Off        |                                     |
-+------------------------+------------+-------------------------------------+
-| Autoaccept suggestions | 0          |                                     |
-+------------------------+------------+-------------------------------------+
-| Translators group      | Users      | Or Translate with access control.   |
-+------------------------+------------+-------------------------------------+
-| Reviewers group        | N/A        | Not used.                           |
-+------------------------+------------+-------------------------------------+
++------------------------+-------------+------------------------------------+
+| Setting                |   Value     |   Note                             |
++========================+=============+====================================+
+| Enable reviews         | off         | Configured at project level.       |
++------------------------+-------------+------------------------------------+
+| Enable suggestions     | on          | It is useful for users to be able  |
+|                        |             | to suggest when they are not sure. |
++------------------------+-------------+------------------------------------+
+| Suggestion voting      | off         |                                    |
++------------------------+-------------+------------------------------------+
+| Autoaccept suggestions | 0           |                                    |
++------------------------+-------------+------------------------------------+
+| Translators group      | `Users`     | Or `Translate` with                |
+|                        |             | :ref:`per-project access control   |
+|                        |             | <manage-acl>`.                     |
++------------------------+-------------+------------------------------------+
+| Reviewers group        | N/A         | Not used.                          |
++------------------------+-------------+------------------------------------+
 
 
 .. _peer-review:
@@ -82,22 +101,24 @@ from additional member(s) before it is accepted as a translation.
 * *Any user* can vote for suggestions.
 * Suggestions become translations when given a predetermined number of votes.
 
-+------------------------+------------+-------------------------------------+
-| Setting                |   Value    |   Note                              |
-+========================+============+=====================================+
-| Enable reviews         | off        | Configured at project level.        |
-+------------------------+------------+-------------------------------------+
-| Enable suggestions     | on         |                                     |
-+------------------------+------------+-------------------------------------+
-| Suggestion voting      | on         |                                     |
-+------------------------+------------+-------------------------------------+
-| Autoaccept suggestions | 1          | You can set higher value to require |
-|                        |            | more peer reviews.                  |
-+------------------------+------------+-------------------------------------+
-| Translators group      | Users      | Or Translate with access control.   |
-+------------------------+------------+-------------------------------------+
-| Reviewers group        | N/A        | Not used, all translators review.   |
-+------------------------+------------+-------------------------------------+
++------------------------+-------------+------------------------------------+
+| Setting                |   Value     |   Note                             |
++========================+=============+====================================+
+| Enable reviews         | off         | Configured at project level.       |
++------------------------+-------------+------------------------------------+
+| Enable suggestions     | on          |                                    |
++------------------------+-------------+------------------------------------+
+| Suggestion voting      | off         |                                    |
++------------------------+-------------+------------------------------------+
+| Autoaccept suggestions | 1           | You can set higher value to        |
+|                        |             | require more peer reviews.         |
++------------------------+-------------+------------------------------------+
+| Translators group      | `Users`     | Or `Translate` with                |
+|                        |             | :ref:`per-project access control   |
+|                        |             | <manage-acl>`.                     |
++------------------------+-------------+------------------------------------+
+| Reviewers group        | N/A         | Not used, all translators review.  |
++------------------------+-------------+------------------------------------+
 
 .. _reviews:
 
@@ -113,35 +134,39 @@ translations, and one able to review them to ensure translations are
 consistent and that the quality is good.
 
 * *Any user* can edit unapproved translations.
-* *Reviewer* can approve / unapproved strings.
+* *Reviewer* can approve / unapprove strings.
 * *Reviewer* can edit all translations (including approved ones).
 * Suggestions can also be used to suggest changes for approved strings.
 
-+------------------------+------------+-------------------------------------+
-| Setting                |   Value    |   Note                              |
-+========================+============+=====================================+
-| Enable reviews         | on         | Configured at project level.        |
-+------------------------+------------+-------------------------------------+
-| Enable suggestions     | off        | It is useful for users to be able to|
-|                        |            | suggest when they are not sure.     |
-+------------------------+------------+-------------------------------------+
-| Suggestion voting      | off        |                                     |
-+------------------------+------------+-------------------------------------+
-| Autoaccept suggestions | 0          |                                     |
-+------------------------+------------+-------------------------------------+
-| Translators group      | Users      | Or Translate with access control.   |
-+------------------------+------------+-------------------------------------+
-| Reviewers group        | Reviewers  | Or Review with access control.      |
-+------------------------+------------+-------------------------------------+
++------------------------+-------------+------------------------------------+
+| Setting                |   Value     |   Note                             |
++========================+=============+====================================+
+| Enable reviews         | on          | Configured at project level.       |
++------------------------+-------------+------------------------------------+
+| Enable suggestions     | off         | It is useful for users to be able  |
+|                        |             | to suggest when they are not sure. |
++------------------------+-------------+------------------------------------+
+| Suggestion voting      | off         |                                    |
++------------------------+-------------+------------------------------------+
+| Autoaccept suggestions | 0           |                                    |
++------------------------+-------------+------------------------------------+
+| Translators group      | `Users`     | Or `Translate` with                |
+|                        |             | :ref:`per-project access control   |
+|                        |             | <manage-acl>`.                     |
++------------------------+-------------+------------------------------------+
+| Reviewers group        | `Reviewers` | Or `Review` with                   |
+|                        |             | :ref:`per-project access control   |
+|                        |             | <manage-acl>`.                     |
++------------------------+-------------+------------------------------------+
 
 Turning on reviews
 ------------------
 
 Reviews can be turned on in the project configuration, from the
 :guilabel:`Workflow` subpage of project settings (to be found in the
-:guilabel:`Manage` → `Settings` menu):
+:guilabel:`Manage` → :guilabel:`Settings` menu):
 
-.. image:: images/project-workflow.png
+.. image:: /screenshots/project-workflow.png
 
 .. note::
 
@@ -169,34 +194,28 @@ translators to translate into additional languages.
 .. graphviz::
 
     digraph translations {
-        graph [fontname = "sans-serif"];
-        node [fontname = "sans-serif"];
-        edge [fontname = "sans-serif"];
+        graph [fontname = "sans-serif", fontsize=10];
+        node [fontname = "sans-serif", fontsize=10, margin=0.1, height=0, style=filled, fillcolor=white, shape=note];
+        edge [fontname = "sans-serif", fontsize=10];
 
         subgraph cluster_dev {
             style=filled;
             color=lightgrey;
-            node [style=filled,fillcolor=white];
 
             label = "Development process";
 
-            "Developers" [shape=box, fillcolor=seagreen, fontcolor=white, style=filled];
+            "Developers" [shape=box, fillcolor="#144d3f", fontcolor=white];
             "Developers" -> "Intermediate file";
-            "Intermediate file" [shape=note];
         }
 
         subgraph cluster_l10n {
             style=filled;
             color=lightgrey;
-            node [style=filled,fillcolor=white];
 
             label = "Localization process";
 
-            "Translators" [shape=box, fillcolor=seagreen, fontcolor=white, style=filled];
-            "Editors" [shape=box, fillcolor=seagreen, fontcolor=white, style=filled];
-
-            "Monolingual base language file" [shape=note];
-            "Translation language file" [shape=note];
+            "Translators" [shape=box, fillcolor="#144d3f", fontcolor=white];
+            "Editors" [shape=box, fillcolor="#144d3f", fontcolor=white];
 
             "Editors" -> "Monolingual base language file";
             "Translators" -> "Translation language file";
@@ -237,6 +256,7 @@ or remove the label.
 
 .. seealso::
 
-    :ref:`bimono`,
-    :ref:`reviews`,
-    :ref:`labels`
+   :ref:`bimono`,
+   :ref:`reviews`,
+   :ref:`labels`,
+   :ref:`user-comments`

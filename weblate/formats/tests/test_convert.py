@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -22,6 +22,7 @@ from weblate.formats.convert import (
     HTMLFormat,
     IDMLFormat,
     OpenDocumentFormat,
+    PlainTextFormat,
     WindowsRCFormat,
 )
 from weblate.formats.helpers import BytesIOMode
@@ -32,6 +33,7 @@ IDML_FILE = get_test_file("en.idml")
 HTML_FILE = get_test_file("cs.html")
 OPENDOCUMENT_FILE = get_test_file("cs.odt")
 TEST_RC = get_test_file("cs-CZ.rc")
+TEST_TXT = get_test_file("cs.txt")
 
 
 class ConvertFormatTest(AutoFormatTest):
@@ -50,7 +52,7 @@ class HTMLFormatTest(ConvertFormatTest):
     COUNT = 5
     MASK = "*/translations.html"
     EXPECTED_PATH = "cs_CZ/translations.html"
-    FIND_CONTEXT = "cs.html+html.body.p:5-1"
+    FIND_CONTEXT = "+html.body.p:5-1"
     FIND_MATCH = "Orangutan has five bananas."
     MATCH = b"<body>"
     NEW_UNIT_MATCH = None
@@ -68,7 +70,7 @@ class OpenDocumentFormatTest(ConvertFormatTest):
     MASK = "*/translations.odt"
     EXPECTED_PATH = "cs_CZ/translations.odt"
     FIND_CONTEXT = (
-        "cs.odt///office:document-content[0]/office:body[0]/office:text[0]/text:p[1]"
+        "odf///office:document-content[0]/office:body[0]/office:text[0]/text:p[1]"
     )
     FIND_MATCH = "Orangutan has five bananas."
     MATCH = b"PK"
@@ -80,12 +82,13 @@ class OpenDocumentFormatTest(ConvertFormatTest):
     @staticmethod
     def extract_document(content):
         return bytes(
-            OpenDocumentFormat.convertfile(BytesIOMode("test.odt", content))
+            OpenDocumentFormat.convertfile(BytesIOMode("test.odt", content), None)
         ).decode()
 
     def assert_same(self, newdata, testdata):
         self.assertEqual(
-            self.extract_document(newdata), self.extract_document(testdata),
+            self.extract_document(newdata),
+            self.extract_document(testdata),
         )
 
 
@@ -110,11 +113,14 @@ class IDMLFormatTest(ConvertFormatTest):
 
     @staticmethod
     def extract_document(content):
-        return bytes(IDMLFormat.convertfile(BytesIOMode("test.idml", content))).decode()
+        return bytes(
+            IDMLFormat.convertfile(BytesIOMode("test.idml", content), None)
+        ).decode()
 
     def assert_same(self, newdata, testdata):
         self.assertEqual(
-            self.extract_document(newdata), self.extract_document(testdata),
+            self.extract_document(newdata),
+            self.extract_document(testdata),
         )
 
 
@@ -130,4 +136,19 @@ class WindowsRCFormatTest(ConvertFormatTest):
     MATCH = "STRINGTABLE"
     FIND_CONTEXT = "STRINGTABLE.IDS_MSG1"
     FIND_MATCH = "Hello, world!\n"
+    EDIT_OFFSET = 1
+
+
+class PlainTextFormatTest(ConvertFormatTest):
+    FORMAT = PlainTextFormat
+    FILE = TEST_TXT
+    BASE = TEST_TXT
+    MIME = "text/plain"
+    EXT = "txt"
+    COUNT = 5
+    MASK = "txt/*.txt"
+    EXPECTED_PATH = "txt/cs_CZ.txt"
+    MATCH = "Hello"
+    FIND_CONTEXT = "cs.txt:2"
+    FIND_MATCH = "Hello, world!"
     EDIT_OFFSET = 1

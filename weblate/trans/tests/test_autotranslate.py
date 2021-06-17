@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -19,13 +19,13 @@
 
 """Test for automatic translation."""
 
-from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.urls import reverse
 
 from weblate.trans.models import Component
 from weblate.trans.tests.test_views import ViewTestCase
+from weblate.utils.db import using_postgresql
 
 
 class AutoTranslationTest(ViewTestCase):
@@ -93,7 +93,7 @@ class AutoTranslationTest(ViewTestCase):
         """Test for automatic translation with different content."""
         self.perform_auto()
 
-    def test_sugggest(self):
+    def test_suggest(self):
         """Test for automatic suggestion."""
         self.perform_auto(mode="suggest")
         self.perform_auto(0, 1, mode="suggest")
@@ -155,7 +155,7 @@ class AutoTranslationMtTest(ViewTestCase):
         # well inside a transaction, so we avoid using transactions for
         # tests. Otherwise we end up with no matches for the query.
         # See https://dev.mysql.com/doc/refman/5.6/en/innodb-fulltext-index.html
-        if settings.DATABASES["default"]["ENGINE"] == "django.db.backends.mysql":
+        if not using_postgresql():
             return False
         return super()._databases_support_transactions()
 

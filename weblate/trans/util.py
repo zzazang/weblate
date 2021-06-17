@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,25 +17,22 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import locale
 import os
 import sys
+from typing import Dict
 from urllib.parse import urlparse
 
-from django.apps import apps
 from django.core.cache import cache
-from django.db.utils import OperationalError, ProgrammingError
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect
 from django.shortcuts import render as django_render
 from django.shortcuts import resolve_url
-from django.utils import timezone
-from django.utils.encoding import force_str
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
 from lxml import etree
+from translate.misc.multistring import multistring
 from translate.storage.placeables.lisa import parse_xliff, strelem_to_xml
 
 from weblate.utils.data import data_dir
@@ -79,10 +76,18 @@ def get_string(text):
     # Check for null target (happens with XLIFF)
     if text is None:
         return ""
-    if hasattr(text, "strings"):
-        return join_plural(text.strings)
+    if isinstance(text, multistring):
+        return join_plural(get_string(str(item)) for item in text.strings)
+    if isinstance(text, list):
+        return join_plural(get_string(str(item)) for item in text)
+    if isinstance(text, str):
+        # Remove possible surrogates in the string. There doesn't seem to be
+        # a cheap way to detect this, so do the conversion in both cases. In
+        # case of failure, this at least fails when parsing the file instead
+        # being that later when inserting the data to the database.
+        return text.encode("utf-16", "surrogatepass").decode("utf-16")
     # We might get integer or float in some formats
-    return force_str(text)
+    return str(text)
 
 
 def is_repo_link(val):
@@ -122,47 +127,7 @@ def translation_percent(translated, total, zero_complete=True):
     return perc
 
 
-def add_configuration_error(name, message, force_cache=False):
-    """Log configuration error.
-
-    Uses cache in case database is not yet ready.
-    """
-    if apps.models_ready and not force_cache:
-        from weblate.wladmin.models import ConfigurationError
-
-        try:
-            ConfigurationError.objects.add(name, message)
-            return
-        except (OperationalError, ProgrammingError):
-            # The table does not have to be created yet (for example migration
-            # is about to be executed)
-            pass
-    errors = cache.get("configuration-errors", [])
-    errors.append({"name": name, "message": message, "timestamp": timezone.now()})
-    cache.set("configuration-errors", errors)
-
-
-def delete_configuration_error(name, force_cache=False):
-    """Delete configuration error.
-
-    Uses cache in case database is not yet ready.
-    """
-    if apps.models_ready and not force_cache:
-        from weblate.wladmin.models import ConfigurationError
-
-        try:
-            ConfigurationError.objects.remove(name)
-            return
-        except (OperationalError, ProgrammingError):
-            # The table does not have to be created yet (for example migration
-            # is about to be executed)
-            pass
-    errors = cache.get("configuration-errors", [])
-    errors.append({"name": name, "delete": True})
-    cache.set("configuration-errors", errors)
-
-
-def get_clean_env(extra=None):
+def get_clean_env(extra: Dict = None, extra_path: str = None):
     """Return cleaned up environment for subprocess execution."""
     environ = {
         "LANG": "C.UTF-8",
@@ -202,6 +167,8 @@ def get_clean_env(extra=None):
     venv_path = os.path.join(sys.exec_prefix, "bin")
     if venv_path not in environ["PATH"]:
         environ["PATH"] = "{}:{}".format(venv_path, environ["PATH"])
+    if extra_path and extra_path not in environ["PATH"]:
+        environ["PATH"] = "{}:{}".format(extra_path, environ["PATH"])
     return environ
 
 
@@ -215,9 +182,9 @@ def cleanup_repo_url(url, text=None):
         # The URL can not be parsed, so avoid stripping
         return text
     if parsed.username and parsed.password:
-        return text.replace("{0}:{1}@".format(parsed.username, parsed.password), "")
+        return text.replace(f"{parsed.username}:{parsed.password}@", "")
     if parsed.username:
-        return text.replace("{0}@".format(parsed.username), "")
+        return text.replace(f"{parsed.username}@", "")
     return text
 
 
@@ -286,7 +253,7 @@ def sort_choices(choices):
 
 def sort_objects(objects):
     """Sort objects alphabetically."""
-    return sort_unicode(objects, force_str)
+    return sort_unicode(objects, str)
 
 
 def redirect_next(next_url, fallback):
@@ -332,34 +299,7 @@ def rich_to_xliff_string(string_elements):
     string_xml = etree.tostring(xml, encoding="unicode")
 
     # Strip dummy root element
-    return string_xml[3:][:-4]
-
-
-def get_state_css(unit):
-    """Return state flags."""
-    flags = []
-
-    if unit.fuzzy:
-        flags.append("state-need-edit")
-    elif not unit.translated:
-        flags.append("state-empty")
-    elif unit.readonly:
-        flags.append("state-readonly")
-    elif unit.approved:
-        flags.append("state-approved")
-    elif unit.translated:
-        flags.append("state-translated")
-
-    if unit.has_failing_check:
-        flags.append("state-check")
-    if unit.dismissed_checks:
-        flags.append("state-dismissed-check")
-    if unit.has_comment:
-        flags.append("state-comment")
-    if unit.has_suggestion:
-        flags.append("state-suggest")
-
-    return flags
+    return get_string(string_xml[3:][:-4])
 
 
 def check_upload_method_permissions(user, translation, method: str):
@@ -367,15 +307,15 @@ def check_upload_method_permissions(user, translation, method: str):
     if method == "source":
         return (
             translation.is_source
-            and not translation.filename
             and user.has_perm("upload.perform", translation)
+            and hasattr(translation.component.file_format_cls, "update_bilingual")
         )
+    if method == "add":
+        return user.has_perm("unit.add", translation)
     if method in ("translate", "fuzzy"):
         return user.has_perm("unit.edit", translation)
     if method == "suggest":
-        return not translation.is_readonly and user.has_perm(
-            "suggestion.add", translation
-        )
+        return user.has_perm("suggestion.add", translation)
     if method == "approve":
         return user.has_perm("unit.review", translation)
     if method == "replace":

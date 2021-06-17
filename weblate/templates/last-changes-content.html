@@ -13,9 +13,6 @@
             {% if change.project %}
             <a href="{{ change.project.get_absolute_url }}">{{ change.project }}</a>
             {% endif %}
-            {% if change.dictionary %}
-            — <a href="{{ change.dictionary.get_parent_url }}">{{ change.dictionary.language }}</a>
-            {% endif %}
             {% if change.component %}
             / <a href="{{ change.component.get_absolute_url }}">{{ change.component.name }}</a>
             {% endif %}
@@ -26,14 +23,22 @@
     </div>
     <div class="col-xs-10 history-data">
         {% if not in_email %}
-        {% perm 'unit.edit' change.unit as user_can_translate %}
         <div class="btn-float pull-right flip">
             <a class="btn btn-link" href="{{ change.get_absolute_url }}" title="{% trans "View details" %}">{% icon "magnify-plus-outline.svg" %}</a>
             {% if debug %}
             <a class="btn btn-link" href="{% url 'show_change' pk=change.pk %}" title="{% trans "View notification" %}">{% icon "bell.svg" %}</a>
             {% endif %}
-            {% if change.can_revert and user_can_translate %}
-            <a class="btn btn-link" href="{{ change.translation.get_translate_url}}?{% if search_url %}{{ search_url }}&amp;offset={{ offset }}&amp;{% endif %}checksum={{ change.unit.checksum }}&amp;revert={{ change.id }}" title="{% trans "Revert" %}">{% icon "undo.svg" %}</a>
+            {% if change.can_revert %}
+              {% perm 'unit.edit' change.unit as user_can_translate %}
+              {% if user_can_translate %}
+                <a class="btn btn-link" href="{{ change.translation.get_translate_url}}?{% if search_url %}{{ search_url }}&amp;offset={{ offset }}&amp;{% endif %}checksum={{ change.unit.checksum }}&amp;revert={{ change.id }}" title="{% trans "Revert" %}">{% icon "undo.svg" %}</a>
+              {% endif %}
+            {% endif %}
+            {% if change.user and not change.user.is_anonymous %}
+              {% perm 'project.permissions' change.project as user_can_edit_permissions %}
+              {% if user_can_edit_permissions %}
+                <a class="btn btn-link red" href="{% url 'manage-access' project=change.project.slug %}?block_user={{ change.user.username }}#block-user" title="{% trans "Block user" %}">{% icon "account-cancel.svg" %}</a>
+              {% endif %}
             {% endif %}
         </div>
         {% endif %}
@@ -42,8 +47,8 @@
             {% if details %}
                 {{ details }}
             {% elif change.can_revert %}
-                <label>{{ change.unit.translation.component.project.source_language }}</label>
-                {% format_translation change.unit.source change.unit.translation.component.project.source_language %}
+                <label>{{ change.unit.translation.component.source_language }}</label>
+                {% format_translation change.unit.source change.unit.translation.component.source_language %}
                 <label>
                     {{ change.unit.translation.language }}
                     {% comment %}Translators: Number of edits on a change in Damerau–Levenshtein distance{% endcomment %}
@@ -51,14 +56,12 @@
                 </label>
                 {% format_translation change.target change.unit.translation.language change.unit.translation.plural diff=change.old %}
             {% elif change.show_content and change.unit %}
-                <label>{{ change.unit.translation.component.project.source_language }}</label>
-                {% format_translation change.unit.source change.unit.translation.component.project.source_language %}
+                <label>{{ change.unit.translation.component.source_language }}</label>
+                {% format_translation change.unit.source change.unit.translation.component.source_language %}
                 <label>{{ change.unit.translation.language }}</label>
                 {% format_translation change.target change.unit.translation.language change.unit.translation.plural %}
-            {% elif change.show_content and change.dictionary %}
-                {% format_translation change.target change.dictionary.language  %}
             {% elif change.show_source %}
-                {% format_translation change.target change.component.project.source_language diff=change.old %}
+                {% format_translation change.target change.component.source_language diff=change.old %}
             {% elif change.target %}
                 <pre>{{ change.target }}</pre>
             {% else %}
@@ -74,6 +77,6 @@
     </div>
 </div>
 {% empty %}
-<p>{% trans "No matching activity found." %}</p>
+<p><em>{% trans "No matching activity found." %}</em></p>
 {% endfor %}
 </div>

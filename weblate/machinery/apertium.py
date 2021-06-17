@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -117,7 +117,7 @@ class ApertiumAPYTranslation(MachineTranslation):
 
     def download_languages(self):
         """Download list of supported languages from a service."""
-        data = self.request_status("get", "{0}/listPairs".format(self.url))
+        data = self.request_status("get", f"{self.url}/listPairs")
         return [
             (item["sourceLanguage"], item["targetLanguage"])
             for item in data["responseData"]
@@ -127,16 +127,23 @@ class ApertiumAPYTranslation(MachineTranslation):
         """Check whether given language combination is supported."""
         return (source, language) in self.supported_languages
 
-    def download_translations(self, source, language, text, unit, user, search):
+    def download_translations(
+        self,
+        source,
+        language,
+        text: str,
+        unit,
+        user,
+        search: bool,
+        threshold: int = 75,
+    ):
         """Download list of possible translations from Apertium."""
         args = {
-            "langpair": "{0}|{1}".format(source, language),
+            "langpair": f"{source}|{language}",
             "q": text,
             "markUnknown": "no",
         }
-        response = self.request_status(
-            "get", "{0}/translate".format(self.url), params=args
-        )
+        response = self.request_status("get", f"{self.url}/translate", params=args)
 
         yield {
             "text": response["responseData"]["translatedText"],

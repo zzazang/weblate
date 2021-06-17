@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -76,8 +76,7 @@ class ModelTest(FixtureTestCase):
 
         # Assign component list to a group
         clist = ComponentList.objects.create(name="Test", slug="test")
-        self.group.componentlist = clist
-        self.group.save()
+        self.group.componentlists.add(clist)
 
         # No permissions as component list is empty
         self.assertFalse(self.user.can_access_project(self.project))
@@ -128,6 +127,14 @@ class ModelTest(FixtureTestCase):
         # Remove Django group
         self.user.groups.remove(DjangoGroup.objects.get(name="Second"))
         self.assertEqual(self.user.groups.count(), 2)
+
+        # Set Weblate group
+        self.user.groups.set(Group.objects.filter(name="Test"))
+        self.assertEqual(self.user.groups.count(), 1)
+
+        # Set Django group
+        self.user.groups.set(DjangoGroup.objects.filter(name="Second"))
+        self.assertEqual(self.user.groups.count(), 1)
 
     def test_user(self):
         # Create user with Django User fields

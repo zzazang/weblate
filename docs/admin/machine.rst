@@ -9,7 +9,7 @@ to their terms of use, so ensure you are allowed to use them how you want.
 
 The source language can be configured at :ref:`project`.
 
-Amagama
+amaGama
 -------
 
 Special installation of :ref:`tmserver` run by the authors of Virtaal.
@@ -19,8 +19,9 @@ Turn on this service by adding ``weblate.machinery.tmserver.AmagamaTranslation``
 
 .. seealso::
 
+    :ref:`amagama:installation`,
     :doc:`virtaal:amagama`,
-    `Amagama Translation Memory <https://amagama.translatehouse.org/>`_
+    `amaGama Translation Memory <https://amagama.translatehouse.org/>`_
 
 .. _apertium:
 
@@ -38,7 +39,7 @@ Turn on this service by adding ``weblate.machinery.apertium.ApertiumAPYTranslati
 .. seealso::
 
     :setting:`MT_APERTIUM_APY`, `Apertium website <https://www.apertium.org/>`_,
-    `Apertium APy documentation <http://wiki.apertium.org/wiki/Apertium-apy>`_
+    `Apertium APy documentation <https://wiki.apertium.org/wiki/Apertium-apy>`_
 
 .. _aws:
 
@@ -90,13 +91,27 @@ DeepL
 .. versionadded:: 2.20
 
 DeepL is paid service providing good machine translation for a few languages.
+You need to purchase :guilabel:`DeepL API` subscription or you can use legacy
+:guilabel:`DeepL Pro (classic)` plan.
 
 Turn on this service by adding ``weblate.machinery.deepl.DeepLTranslation`` to
 :setting:`MT_SERVICES` and set :setting:`MT_DEEPL_KEY`.
 
+.. hint::
+
+   In case you have subscription for CAT tools, you are supposed to use "v1
+   API" instead of default "v2" used by Weblate (it is not really an API
+   version in this case).
+   In case you are on a free instead of a paid plan, you have to use
+   ``https://api-free.deepl.com/`` instead of ``https://api.deepl.com/``
+   You can adjust both parameters by :setting:`MT_DEEPL_API_URL`.
+
 .. seealso::
 
-    :setting:`MT_DEEPL_KEY`, `DeepL website <https://www.deepl.com/>`_,
+    :setting:`MT_DEEPL_KEY`,
+    :setting:`MT_DEEPL_API_URL`,
+    `DeepL website <https://www.deepl.com/>`_,
+    `DeepL pricing <https://www.deepl.com/pro>`_,
     `DeepL API documentation <https://www.deepl.com/api.html>`_
 
 
@@ -136,6 +151,27 @@ To turn on this service, add ``weblate.machinery.google.GoogleTranslation`` to
     :setting:`MT_GOOGLE_KEY`,
     `Google translate documentation <https://cloud.google.com/translate/docs>`_
 
+.. _google-translate-api3:
+
+Google Translate API V3 (Advanced)
+----------------------------------
+
+Machine translation service provided by Google Cloud services.
+
+This service differs from the former one in how it authenticates.
+To enable service, add ``weblate.machinery.googlev3.GoogleV3Translation`` to
+:setting:`MT_SERVICES` and set
+
+ - :setting:`MT_GOOGLE_CREDENTIALS`
+ - :setting:`MT_GOOGLE_PROJECT`
+
+If `location` fails, you may also need to specify :setting:`MT_GOOGLE_LOCATION`.
+
+.. seealso::
+
+    :setting:`MT_GOOGLE_CREDENTIALS`, :setting:`MT_GOOGLE_PROJECT`, :setting:`MT_GOOGLE_LOCATION`
+    `Google translate documentation <https://cloud.google.com/translate/docs>`_
+
 .. _ms-cognitive-translate:
 
 Microsoft Cognitive Services Translator
@@ -163,7 +199,7 @@ With new Azure keys, you also need to set :setting:`MT_MICROSOFT_REGION` to loca
 .. seealso::
 
     :setting:`MT_MICROSOFT_COGNITIVE_KEY`, :setting:`MT_MICROSOFT_REGION`,
-    `Cognitive Services - Text Translation API <https://azure.microsoft.com/services/cognitive-services/translator-text-api/>`_,
+    `Cognitive Services - Text Translation API <https://azure.microsoft.com/en-us/services/cognitive-services/translator/>`_,
     `Microsoft Azure Portal <https://portal.azure.com/>`_
 
 .. _ms-terminology:
@@ -183,6 +219,23 @@ Turn this service on by adding ``weblate.machinery.microsoftterminology.Microsof
 .. seealso::
 
     `Microsoft Terminology Service API <https://www.microsoft.com/en-us/language/Microsoft-Terminology-API>`_
+
+.. _modernmt:
+
+ModernMT
+--------
+
+.. versionadded:: 4.2
+
+
+Turn this service on by adding ``weblate.machinery.modernmt.ModernMTTranslation`` to
+:setting:`MT_SERVICES` and configure :setting:`MT_MODERNMT_KEY`.
+
+.. seealso::
+
+    `ModernMT API <https://www.modernmt.com/api/#translation>`_,
+    :setting:`MT_MODERNMT_KEY`,
+    :setting:`MT_MODERNMT_URL`
 
 .. _mymemory:
 
@@ -212,7 +265,7 @@ NetEase Sight API machine translation
 
 .. versionadded:: 3.3
 
-Machine translation service provided by Netease.
+Machine translation service provided by NetEase.
 
 This service uses an API, and you need to obtain key and secret from NetEase.
 
@@ -224,7 +277,7 @@ Turn on this service by adding ``weblate.machinery.youdao.NeteaseSightTranslatio
 
     :setting:`MT_NETEASE_KEY`,
     :setting:`MT_NETEASE_SECRET`
-    `Netease Sight Translation Platform <https://sight.netease.com/>`_
+    `NetEase Sight Translation Platform <https://sight.youdao.com/>`_
 
 .. _tmserver:
 
@@ -256,12 +309,13 @@ amaGama server, which is an enhanced version of tmserver.
 
 .. code-block:: python
 
-    MT_TMSERVER = 'http://localhost:8888/tmserver/'
+    MT_TMSERVER = "http://localhost:8888/tmserver/"
 
 .. seealso::
 
     :setting:`MT_TMSERVER`,
     :doc:`tt:commands/tmserver`
+    :ref:`amagama:installation`,
     :doc:`virtaal:amagama`,
     `Amagama Translation Memory <https://amagama.translatehouse.org/>`_
 
@@ -281,7 +335,7 @@ Turn on this service by adding ``weblate.machinery.yandex.YandexTranslation`` to
 .. seealso::
 
     :setting:`MT_YANDEX_KEY`,
-    `Yandex Translate API <https://tech.yandex.com/translate/>`_,
+    `Yandex Translate API <https://yandex.com/dev/translate/>`_,
     `Powered by Yandex.Translate <https://translate.yandex.com/>`_
 
 .. _youdao-translate:
@@ -303,7 +357,7 @@ Turn on this service by adding ``weblate.machinery.youdao.YoudaoTranslation`` to
 
     :setting:`MT_YOUDAO_ID`,
     :setting:`MT_YOUDAO_SECRET`
-    `Youdao Zhiyun Natural Language Translation Service <https://ai.youdao.com/product-fanyi.s>`_
+    `Youdao Zhiyun Natural Language Translation Service <https://ai.youdao.com/product-fanyi-text.s>`_
 
 Weblate
 -------
@@ -335,12 +389,12 @@ SAP Translation Hub
 
 Machine translation service provided by SAP.
 
-You need to have a SAP account (and enabled the SAP Translation Hub in the SAP Cloud
+You need to have a SAP account (and the SAP Translation Hub enabled in the SAP Cloud
 Platform) to use this service.
 
 Turn on this service by adding ``weblate.machinery.saptranslationhub.SAPTranslationHub`` to
-:setting:`MT_SERVICES` and set the appropriate access to either
-sandbox or the productive API.
+:setting:`MT_SERVICES` and set the appropriate access to either the
+sandbox or the production API.
 
 .. note::
 
@@ -369,5 +423,5 @@ languages using ``dictionary`` Python module:
 .. literalinclude:: ../../weblate/examples/mt_service.py
     :language: python
 
-You can list own class in :setting:`MT_SERVICES` and Weblate
+You can list your own class in :setting:`MT_SERVICES` and Weblate
 will start using that.

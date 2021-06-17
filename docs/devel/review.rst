@@ -10,10 +10,10 @@ Activity reports
 
 Activity reports check changes of translations, for projects, components or individual users.
 
-The activity reports for a project or component is accessible from its dashboard, on the :guilabel:`Insights`
-tab, selecting :guilabel:`Activity`.
+The activity reports for a project or component is accessible from its dashboard, on the :guilabel:`Info`
+tab.
 
-.. image:: /images/activity.png
+.. image:: /screenshots/activity.png
 
 More reports are accessible on the :guilabel:`Insights`
 tab, selecting :guilabel:`Translation reports`.
@@ -42,7 +42,7 @@ source strings. To make source strings review easier, Weblate automatically
 creates a translation for the source language and shows you source level checks
 there:
 
-.. image:: /images/source-review.png
+.. image:: /screenshots/source-review.png
 
 One of the most interesting checks here is the :ref:`check-multiple-failures` -
 it is triggered whenever there is failure on multiple translations of a given string.
@@ -51,12 +51,19 @@ problems translating properly.
 
 The detailed listing is a per language overview:
 
-.. image:: /images/source-review-detail.png
+.. image:: /screenshots/source-review-detail.png
 
-String comments
----------------
+.. _report-source:
 
-Translators can comment on both translation and source strings.
-Each :ref:`component` can be configured to receive such comments to an e-mail
-address, and using the developers mailing list is usually the best approach.
-This way you can keep an eye on when problems arise in translation, take care of them, and fix them quickly.
+Receiving source string feedback
+--------------------------------
+
+Translators can comment on both translation and source strings. Each
+:ref:`component` can be configured to receive such comments to an e-mail
+address (see :ref:`component-report_source_bugs`), and using the developers
+mailing list is usually the best approach.  This way you can keep an eye on
+when problems arise in translation, take care of them, and fix them quickly.
+
+.. seealso::
+
+    :ref:`user-comments`

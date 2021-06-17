@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -26,15 +26,21 @@ from django.utils.http import urlencode
 from django.utils.translation import gettext as _
 from django.views.generic import CreateView, UpdateView
 
-from weblate.lang import data
 from weblate.lang.forms import LanguageForm, PluralForm
 from weblate.lang.models import Language, Plural
-from weblate.trans.forms import SearchForm
+from weblate.trans.forms import ProjectLanguageDeleteForm, SearchForm
 from weblate.trans.models import Change
+from weblate.trans.models.project import prefetch_project_flags
+from weblate.trans.models.translation import GhostTranslation
 from weblate.trans.util import sort_objects
 from weblate.utils import messages
-from weblate.utils.stats import GlobalStats, prefetch_stats
-from weblate.utils.views import get_paginator, get_project
+from weblate.utils.stats import (
+    GlobalStats,
+    ProjectLanguage,
+    ProjectLanguageStats,
+    prefetch_stats,
+)
+from weblate.utils.views import get_project, optional_form
 
 
 def show_languages(request):
@@ -63,7 +69,9 @@ def show_language(request, lang):
             return redirect(obj)
         raise Http404("No Language matches the given query.")
 
-    if request.method == "POST" and request.user.has_perm("language.edit"):
+    user = request.user
+
+    if request.method == "POST" and user.has_perm("language.edit"):
         if obj.translation_set.exists():
             messages.error(
                 request, _("Remove all translations using this language first.")
@@ -73,13 +81,14 @@ def show_language(request, lang):
             messages.success(request, _("Language %s removed.") % obj)
             return redirect("languages")
 
-    last_changes = Change.objects.last_changes(request.user).filter(language=obj)[:10]
-    projects = request.user.allowed_projects
-    dicts = projects.filter(dictionary__language=obj).distinct()
-    projects = projects.filter(component__translation__language=obj).distinct()
+    last_changes = Change.objects.last_changes(user).filter(language=obj)[:10]
+    projects = user.allowed_projects
+    projects = prefetch_project_flags(
+        prefetch_stats(projects.filter(component__translation__language=obj).distinct())
+    )
+    projects = [ProjectLanguage(project, obj) for project in projects]
 
-    for project in projects:
-        project.language_stats = project.stats.get_single_language_stats(obj)
+    ProjectLanguageStats.prefetch_many([project.stats for project in projects])
 
     return render(
         request,
@@ -89,7 +98,7 @@ def show_language(request, lang):
             "object": obj,
             "last_changes": last_changes,
             "last_changes_url": urlencode({"lang": obj.code}),
-            "dicts": dicts,
+            "search_form": SearchForm(user, language=obj),
             "projects": projects,
         },
     )
@@ -97,41 +106,56 @@ def show_language(request, lang):
 
 def show_project(request, lang, project):
     try:
-        obj = Language.objects.get(code=lang)
+        language_object = Language.objects.get(code=lang)
     except Language.DoesNotExist:
-        obj = Language.objects.fuzzy_get(lang)
-        if isinstance(obj, Language):
-            return redirect(obj)
+        language_object = Language.objects.fuzzy_get(lang)
+        if isinstance(language_object, Language):
+            return redirect(language_object)
         raise Http404("No Language matches the given query.")
 
-    pobj = get_project(request, project)
+    project_object = get_project(request, project)
+    obj = ProjectLanguage(project_object, language_object)
+    user = request.user
 
-    last_changes = Change.objects.last_changes(request.user).filter(
-        language=obj, project=pobj
+    last_changes = Change.objects.last_changes(user).filter(
+        language=language_object, project=project_object
     )[:10]
 
-    # Paginate translations.
-    translation_list = (
-        obj.translation_set.prefetch()
-        .filter(component__project=pobj)
-        .order_by("component__name")
-    )
-    translations = get_paginator(request, translation_list)
+    translations = list(obj.translation_set)
+
+    # Add ghost translations
+    if user.is_authenticated:
+        existing = {translation.component.slug for translation in translations}
+        for component in project_object.child_components:
+            if component.slug in existing:
+                continue
+            if component.can_add_new_language(user, fast=True):
+                translations.append(GhostTranslation(component, language_object))
 
     return render(
         request,
         "language-project.html",
         {
             "allow_index": True,
-            "language": obj,
-            "project": pobj,
+            "language": language_object,
+            "project": project_object,
+            "object": obj,
             "last_changes": last_changes,
-            "last_changes_url": urlencode({"lang": obj.code, "project": pobj.slug}),
+            "last_changes_url": urlencode(
+                {"lang": language_object.code, "project": project_object.slug}
+            ),
             "translations": translations,
-            "title": "{0} - {1}".format(pobj, obj),
-            "search_form": SearchForm(request.user),
-            "licenses": pobj.component_set.exclude(license="").order_by("license"),
-            "language_stats": pobj.stats.get_single_language_stats(obj),
+            "title": f"{project_object} - {language_object}",
+            "search_form": SearchForm(user, language=language_object),
+            "licenses": project_object.component_set.exclude(license="").order_by(
+                "license"
+            ),
+            "language_stats": project_object.stats.get_single_language_stats(
+                language_object
+            ),
+            "delete_form": optional_form(
+                ProjectLanguageDeleteForm, user, "translation.delete", obj, obj=obj
+            ),
         },
     )
 
@@ -156,8 +180,6 @@ class CreateLanguageView(CreateView):
         self.object = form[0].save()
         plural = form[1].instance
         plural.language = self.object
-        plural.type = data.PLURAL_UNKNOWN
-        plural.source = Plural.SOURCE_DEFAULT
         plural.save()
         return redirect(self.object)
 

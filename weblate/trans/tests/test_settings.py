@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -41,7 +41,7 @@ class SettingsTest(ViewTestCase):
         url = reverse("settings", kwargs=self.kw_project)
         response = self.client.get(url)
         self.assertContains(response, "Settings")
-        data = response.context["settings_form"].initial
+        data = response.context["form"].initial
         data["web"] = "https://example.com/test/"
         response = self.client.post(url, data, follow=True)
         self.assertContains(response, "Settings saved")
@@ -56,7 +56,7 @@ class SettingsTest(ViewTestCase):
 
         # Get initial form data
         response = self.client.get(url)
-        data = response.context["settings_form"].initial
+        data = response.context["form"].initial
         data["access_control"] = Project.ACCESS_PROTECTED
 
         # No permissions
@@ -102,6 +102,36 @@ class SettingsTest(ViewTestCase):
         data = {}
         data.update(response.context["form"].initial)
         data["license"] = "MIT"
+        data["enforced_checks"] = ["same", "duplicate"]
         response = self.client.post(url, data, follow=True)
         self.assertContains(response, "Settings saved")
-        self.assertEqual(Component.objects.get(pk=self.component.pk).license, "MIT")
+        component = Component.objects.get(pk=self.component.pk)
+        self.assertEqual(component.license, "MIT")
+        self.assertEqual(component.enforced_checks, ["same", "duplicate"])
+
+    def test_shared_component(self):
+        self.project.add_user(self.user, "@Administration")
+        url = reverse("settings", kwargs=self.kw_component)
+
+        # Create extra project
+        other = Project.objects.create(name="Other", slug="other")
+
+        response = self.client.get(url)
+        self.assertContains(response, "Settings")
+        data = {}
+        data.update(response.context["form"].initial)
+        data["links"] = other.pk
+        del data["enforced_checks"]
+
+        # Can not add link to non owned project
+        response = self.client.post(url, data, follow=True)
+        self.assertNotContains(response, "Settings saved")
+        response = self.client.get(other.get_absolute_url())
+        self.assertNotContains(response, self.component.get_absolute_url())
+
+        # Add link to owned project
+        other.add_user(self.user, "@Administration")
+        response = self.client.post(url, data, follow=True)
+        self.assertContains(response, "Settings saved")
+        response = self.client.get(other.get_absolute_url())
+        self.assertContains(response, self.component.get_absolute_url())

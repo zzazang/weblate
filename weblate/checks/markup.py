@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -35,30 +35,49 @@ BBCODE_MATCH = re.compile(
 )
 
 MD_LINK = re.compile(
-    r"!?\[("
-    r"(?:\[[^^\]]*\]|[^\[\]]|\](?=[^\[]*\]))*"
-    r")\]\("
-    r"""\s*(<)?([\s\S]*?)(?(2)>)(?:\s+['"]([\s\S]*?)['"])?\s*"""
-    r"\)"
+    r"""
+    (?:
+    !?                                                          # Exclamation for images
+    \[((?:\[[^^\]]*\]|[^\[\]]|\](?=[^\[]*\]))*)\]               # Link text
+    \(
+        \s*(<)?([\s\S]*?)(?(2)>)                                # URL
+        (?:\s+['"]([\s\S]*?)['"])?\s*                           # Title
+    \)
+    |
+    <(https?://[^>]+)>                                          # URL
+    |
+    <([^>]+@[^>]+\.[^>]+)>                                      # E-mail
+    )
+    """,
+    re.VERBOSE,
 )
+MD_BROKEN_LINK = re.compile(r"\] +\(")
 MD_REFLINK = re.compile(
     r"!?\[("  # leading [
     r"(?:\[[^^\]]*\]|[^\[\]]|\](?=[^\[]*\]))*"  # link text
     r")\]\s*\[([^^\]]*)\]"  # trailing ] with optional target
 )
 MD_SYNTAX = re.compile(
-    r"(_{2})(?:[\s\S]+?)_{2}(?!_)"  # __word__
-    r"|"
-    r"(\*{2})(?:[\s\S]+?)\*{2}(?!\*)"  # **word**
-    r"|"
-    r"\b(_)(?:(?:__|[^_])+?)_\b"  # _word_
-    r"|"
-    r"(\*)(?:(?:\*\*|[^\*])+?)\*(?!\*)"  # *word*
-    r"|"
-    r"(`+)\s*(?:[\s\S]*?[^`])\s*\5(?!`)"  # `code`
-    r"|"
-    r"(~~)(?=\S)(?:[\s\S]*?\S)~~"  # ~~word~~
+    r"""
+    (_{2})(?:[\s\S]+?)_{2}(?!_)         # __word__
+    |
+    (\*{2})(?:[\s\S]+?)\*{2}(?!\*)      # **word**
+    |
+    \b(_)(?:(?:__|[^_])+?)_\b           # _word_
+    |
+    (\*)(?:(?:\*\*|[^\*])+?)\*(?!\*)    # *word*
+    |
+    (`+)\s*(?:[\s\S]*?[^`])\s*\5(?!`)   # `code`
+    |
+    (~~)(?=\S)(?:[\s\S]*?\S)~~          # ~~word~~
+    |
+    (<)(?:https?://[^>]+)>              # URL
+    |
+    (<)(?:[^>]+@[^>]+\.[^>]+)>          # E-mail
+    """,
+    re.VERBOSE,
 )
+MD_SYNTAX_GROUPS = 8
 
 XML_MATCH = re.compile(r"<[^>]+>")
 XML_ENTITY_MATCH = re.compile(r"&#?\w+;")
@@ -113,7 +132,7 @@ class BaseXMLCheck(TargetCheck):
                 return self.parse_xml(text, False), False
         text = strip_entities(text)
         if wrap:
-            text = "<weblate>{}</weblate>".format(text)
+            text = f"<weblate>{text}</weblate>"
 
         return parse_xml(text.encode() if "encoding" in text else text)
 
@@ -261,6 +280,11 @@ class MarkdownLinkCheck(MarkdownBaseCheck):
         src_anchors = {x[2] for x in src_match if x[2] and x[2][0] in link_start}
         return tgt_anchors != src_anchors
 
+    def get_fixup(self, unit):
+        if MD_BROKEN_LINK.findall(unit.target):
+            return [(MD_BROKEN_LINK.pattern, "](")]
+        return None
+
 
 class MarkdownSyntaxCheck(MarkdownBaseCheck):
     check_id = "md-syntax"
@@ -286,14 +310,14 @@ class MarkdownSyntaxCheck(MarkdownBaseCheck):
         ret = []
         for match in MD_SYNTAX.finditer(source):
             value = ""
-            for i in range(6):
+            for i in range(MD_SYNTAX_GROUPS):
                 value = match.group(i + 1)
                 if value:
                     break
             start = match.start()
             end = match.end()
             ret.append((start, start + len(value), value))
-            ret.append((end - len(value), end, value))
+            ret.append((end - len(value), end, value if value != "<" else ">"))
         return ret
 
 
@@ -322,10 +346,6 @@ class SafeHTMLCheck(TargetCheck):
     name = _("Unsafe HTML")
     description = _("The translation uses unsafe HTML markup")
     default_disabled = True
-
-    @cached_property
-    def validator(self):
-        return URLValidator()
 
     def check_single(self, source, target, unit):
         return bleach.clean(target, **extract_bleach(source)) != target

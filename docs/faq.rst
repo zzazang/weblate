@@ -17,8 +17,9 @@ without interaction, unless some merge conflict occurs.
    :ref:`hooks` for info on how to do it.
 2. Set a push URL at your :ref:`component` in Weblate, this allows Weblate
    to push changes to your repository.
-3. Turn on push-on-commit on your :ref:`project` in Weblate, this will make
-   Weblate push changes to your repository whenever they happen at Weblate.
+3. Turn on :ref:`component-push_on_commit` on your :ref:`component` in Weblate,
+   this will make Weblate push changes to your repository whenever they happen
+   at Weblate.
 
 .. seealso::
 
@@ -50,8 +51,8 @@ actions.
 
 .. note::
 
-   Depending on your setup, access to the Weblte repository might require
-   authentication. When using the built in :ref:`git-exporter` in Weblate, you
+   Depending on your setup, access to the Weblate repository might require
+   authentication. When using the built-in :ref:`git-exporter` in Weblate, you
    authenticate with your username and the API key.
 
 .. code-block:: sh
@@ -69,7 +70,7 @@ actions.
     git remote update weblate
 
     # Merge Weblate changes:
-    git merge weblate/master
+    git merge weblate/main
 
     # Resolve conflicts:
     edit …
@@ -98,9 +99,9 @@ If you're using multiple branches in Weblate, you can do the same to all of them
     ... # Resolve conflicts
     git commit
 
-    # Merge master branch:
-    git checkout master
-    git merge weblates-second/master
+    # Merge main branch:
+    git checkout main
+    git merge weblates-second/main
     ... # Resolve conflicts
     git commit
 
@@ -123,7 +124,7 @@ upstream Git repository: An intact and a working copy):
     git remote update weblate
 
     # Merge Weblate changes:
-    git merge weblate/master
+    git merge weblate/main
 
     # Resolve conflicts in the PO files:
     for PO in `find . -name '*.po'` ; do
@@ -140,7 +141,10 @@ upstream Git repository: An intact and a working copy):
 
 .. seealso::
 
-   :ref:`git-export`, :ref:`continuous-translation`, :ref:`avoid-merge-conflicts`
+   :ref:`git-export`,
+   :ref:`continuous-translation`,
+   :ref:`avoid-merge-conflicts`,
+   :ref:`wlc`
 
 How do I translate several branches at once?
 --------------------------------------------
@@ -207,6 +211,8 @@ Here are examples of some workflows used with Weblate:
 
 Of course you are free to mix all of these as you wish.
 
+.. _faq-submodule:
+
 How can I limit Weblate access to only translations, without exposing source code to it?
 ----------------------------------------------------------------------------------------
 
@@ -239,17 +245,6 @@ Weblate includes a set of configuration checks which you can see in the admin
 interface, just follow the :guilabel:`Performance report` link in the admin interface, or
 open the ``/manage/performance/`` URL directly.
 
-.. _faq-site:
-
-Why do links contain example.com as the domain?
------------------------------------------------
-
-Weblate uses Django's sites framework and defines the sitename inside the
-database. You need to set the domain name to match your installation.
-
-.. seealso::
-
-   :ref:`production-site`
 
 Why are all commits committed by Weblate <noreply@weblate.org>?
 ---------------------------------------------------------------
@@ -270,20 +265,32 @@ Usage
 How do I review the translations of others?
 ---------------------------------------------
 
+- There are several review based workflows available in Weblate, see :ref:`workflows`.
 - You can subscribe to any changes made in :ref:`subscriptions` and then check
   others contributions as they come in by e-mail.
 - There is a review tool available at the bottom of the translation view, where you can
   choose to browse translations made by others since a given date.
 
+.. seealso::
+
+   :ref:`workflows`
+
 How do I provide feedback on a source string?
 ---------------------------------------------
 
-On context tabs below translation, you can use the :guilabel:`Source` tab to
+On context tabs below translation, you can use the :guilabel:`Comments` tab to
 provide feedback on a source string, or discuss it with other translators.
+
+.. seealso::
+
+    :ref:`report-source`,
+    :ref:`user-comments`
 
 How can I use existing translations while translating?
 ------------------------------------------------------
 
+- All translations within Weblate can be used thanks to shared translation memory.
+- You can import existing translation memory files into Weblate.
 - Use the import functionality to load compendium as translations,
   suggestions or translations needing review. This is the best approach for a one-time
   translation using a compendium or a similar translation database.
@@ -296,7 +303,11 @@ How can I use existing translations while translating?
 
 .. seealso::
 
-   :ref:`machine-translation-setup`, :ref:`machine-translation`
+   :ref:`machine-translation-setup`,
+   :ref:`machine-translation`,
+   :ref:`memory`
+
+.. _faq-cleanup:
 
 Does Weblate update translation files besides translations?
 -----------------------------------------------------------
@@ -305,18 +316,9 @@ Weblate tries to limit changes in translation files to a minimum. For some file
 formats it might unfortunately lead to reformatting the file. If you want to
 keep the file formatted your way, please use a pre-commit hook for that.
 
-For monolingual files (see :ref:`formats`) Weblate might add new translation
-strings not present in the :guilabel:`template`, and not in actual
-translations. It does not however perform any automatic cleanup of stale
-strings as that might have unexpected outcomes. If you want to do this, please
-install a pre-commit hook which will handle the cleanup according to your requirements.
-
-Weblate also will not try to update bilingual files in any way, so if you need
-:file:`po` files being updated from :file:`pot`, you need to do it yourself.
-
 .. seealso::
 
-   :ref:`processing`
+   :ref:`updating-target-files`
 
 
 Where do language definitions come from and how can I add my own?
@@ -328,6 +330,10 @@ about plural forms or text direction.
 
 You are free to define your own languages in the administrative interface, you just need
 to provide info about it.
+
+.. seealso::
+
+   :ref:`languages`
 
 Can Weblate highlight changes in a fuzzy string?
 ------------------------------------------------
@@ -371,6 +377,11 @@ the :command:`msgmerge` tool:
 In case you want to do the update automatically, you can install
 addon :ref:`addon-weblate.gettext.msgmerge`.
 
+.. seealso::
+
+   :ref:`updating-target-files`
+
+
 Troubleshooting
 +++++++++++++++
 
@@ -406,11 +417,35 @@ It needs to contain all hostnames you want to access on your Weblate. For exampl
 
 .. code-block:: python
 
-    ALLOWED_HOSTS = ['weblate.example.com', 'weblate', 'localhost']
+    ALLOWED_HOSTS = ["weblate.example.com", "weblate", "localhost"]
 
 .. seealso::
 
     :ref:`production-hosts`
+
+.. _faq-duplicate-files:
+
+What does mean "There are more files for the single language (en)"?
+-------------------------------------------------------------------
+
+This typically happens when you have translation file for source language.
+Weblate keeps track of source strings and reserves source language for this.
+The additional file for same language is not processed.
+
+* In case the translation to the source language is desired, please change the :ref:`component-source_language` in the component settings.
+* In case the translation file for the source language is not needed, please remove it from the repository.
+* In case the translation file for the source language is needed, but should be ignored by Weblate, please adjust the :ref:`component-language_regex` to exclude it.
+
+.. hint::
+
+   You might get similar error message for other languages as well. In that
+   case the most likely reason is that several files map to single language in
+   Weblate.
+
+   This can be caused by using obsolete language codes together with new one
+   (``ja`` and ``jp`` for Japanese) or including both country specific and
+   generic codes (``fr`` and ``fr_FR``). See :ref:`language-parsing-codes` for
+   more details.
 
 Features
 ++++++++
@@ -422,12 +457,12 @@ Does Weblate support other VCSes than Git and Mercurial?
 
 Weblate currently does not have native support for anything other than
 :ref:`vcs-git` (with extended support for :ref:`vcs-github`, :ref:`vcs-gerrit`
-and :ref:`vcs-git-svn`) and ref:`vcs-mercurial`, but it is possible to write
+and :ref:`vcs-git-svn`) and :ref:`vcs-mercurial`, but it is possible to write
 backends for other VCSes.
 
 You can also use :ref:`vcs-git-helpers` in Git to access other VCSes.
 
-Weblate also supports VCS less operation, see :ref:`vcs-local`.
+Weblate also supports VCS-less operation, see :ref:`vcs-local`.
 
 .. note::
 
@@ -447,21 +482,22 @@ the standard VCS tools you use for code.
 Additionally, when the translation file format supports it, the file headers are
 updated to include the translator's name.
 
-.. seealso:: :djadmin:`list_translators`
+.. seealso::
+
+   :djadmin:`list_translators`,
+   :doc:`../devel/reporting`
 
 Why does Weblate force showing all PO files in a single tree?
 -------------------------------------------------------------
 
 Weblate was designed in a way that every PO file is represented as a single
 component. This is beneficial for translators, so they know what they are
-actually translating. If you feel your project should be translated as one,
-consider merging these po files. It will make life easier even for translators
-not using Weblate.
+actually translating.
 
-.. note::
+.. versionchanged:: 4.2
 
-    In case there is great demand for this feature, it might be implemented
-    in future versions.
+   Translators can translate all the components of a project into a specific
+   language as a whole.
 
 .. _faq-codes:
 
@@ -474,4 +510,8 @@ are really different languages instead previously wrongly used modifiers (for
 
 Weblate still understands legacy language codes and will map them to
 current one - for example ``sr@latin`` will be handled as ``sr_Latn`` or
-``zh@CN`` as ``sr_Hans``.
+``zh@CN`` as ``zh_Hans``.
+
+.. seealso::
+
+   :ref:`languages`

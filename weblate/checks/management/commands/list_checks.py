@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -43,13 +43,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """List installed checks."""
+        ignores = []
         lines = []
         for check in sorted(CHECKS.values(), key=sorter):
             is_format = isinstance(check, BaseFormatCheck)
-            if not is_format and lines:
-                self.flush_lines(lines)
-            # Output immediatelly
-            self.stdout.write(".. _{}:\n".format(check.doc_id))
+            # Output immediately
+            self.stdout.write(f".. _{check.doc_id}:\n")
             if not lines:
                 lines.append("\n")
             lines.append(str(check.name))
@@ -58,8 +57,13 @@ class Command(BaseCommand):
             else:
                 lines.append("~" * len(check.name))
             lines.append("\n")
-            lines.append("\n".join(wrap("*{}*".format(check.description), 79)))
+            lines.append("\n".join(wrap(f"*{check.description}*", 79)))
             lines.append("\n")
 
-            if not is_format:
-                self.flush_lines(lines)
+            self.flush_lines(lines)
+
+            ignores.append(f"``{check.ignore_string}``")
+            ignores.append(f'    Skip the "{check.name}" quality check.')
+
+        self.stdout.write("\n")
+        self.stdout.writelines(ignores)

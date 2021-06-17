@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -17,6 +17,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
+import json
 
 import dateutil.parser
 from django.conf import settings
@@ -48,35 +49,16 @@ class WeblateModelAdmin(ModelAdmin):
     delete_selected_confirmation_template = "wladmin/delete_selected_confirmation.html"
 
 
-class ConfigurationErrorManager(models.Manager):
-    def add(self, name, message, timestamp=None):
-        if timestamp is None:
-            timestamp = timezone.now()
-        obj, created = self.get_or_create(
-            name=name, defaults={"message": message, "timestamp": timestamp}
-        )
-        if created:
-            return obj
-        if obj.message != message or obj.timestamp != timestamp:
-            obj.message = message
-            obj.timestamp = timestamp
-            obj.save(update_fields=["message", "timestamp"])
-        return obj
-
-    def remove(self, name):
-        self.filter(name=name).delete()
-
-
 class ConfigurationError(models.Model):
     name = models.CharField(unique=True, max_length=150)
     message = models.TextField()
     timestamp = models.DateTimeField(default=timezone.now)
     ignored = models.BooleanField(default=False, db_index=True)
 
-    objects = ConfigurationErrorManager()
-
     class Meta:
         index_together = [("ignored", "timestamp")]
+        verbose_name = "Configuration error"
+        verbose_name_plural = "Configuration errors"
 
     def __str__(self):
         return self.name
@@ -87,6 +69,7 @@ SUPPORT_NAMES = {
     "hosted": gettext_lazy("Hosted service"),
     "basic": gettext_lazy("Basic self-hosted support"),
     "extended": gettext_lazy("Extended self-hosted support"),
+    "premium": gettext_lazy("Premium self-hosted support"),
 }
 
 
@@ -103,14 +86,19 @@ class SupportStatus(models.Model):
     secret = models.CharField(max_length=400)
     expiry = models.DateTimeField(db_index=True, null=True)
     in_limits = models.BooleanField(default=True)
+    discoverable = models.BooleanField(default=False)
 
     objects = SupportStatusManager()
 
-    def get_verbose(self):
-        return SUPPORT_NAMES.get(self.name, self.name)
+    class Meta:
+        verbose_name = "Support status"
+        verbose_name_plural = "Support statuses"
 
     def __str__(self):
-        return "{}:{}".format(self.name, self.expiry)
+        return f"{self.name}:{self.expiry}"
+
+    def get_verbose(self):
+        return SUPPORT_NAMES.get(self.name, self.name)
 
     def refresh(self):
         stats = GlobalStats()
@@ -123,7 +111,23 @@ class SupportStatus(models.Model):
             "components": Component.objects.count(),
             "languages": stats.languages,
             "source_strings": stats.source_strings,
+            "strings": stats.all,
+            "words": stats.all_words,
         }
+        if self.discoverable:
+            data["discoverable"] = 1
+            data["public_projects"] = json.dumps(
+                [
+                    {
+                        "name": project.name,
+                        "url": project.get_absolute_url(),
+                        "web": project.web,
+                    }
+                    for project in Project.objects.filter(
+                        access_control=Project.ACCESS_PUBLIC
+                    ).iterator()
+                ]
+            )
         ssh_key = get_key_data()
         if not ssh_key:
             generate_ssh_key(None)
@@ -144,12 +148,22 @@ class SupportStatus(models.Model):
 
 class BackupService(models.Model):
     repository = models.CharField(
-        max_length=500, default="", verbose_name=gettext_lazy("Backup repository")
+        max_length=500,
+        default="",
+        verbose_name=gettext_lazy("Backup repository URL"),
+        help_text=gettext_lazy(
+            "Use /path/to/repo for local backups "
+            "or user@host:/path/to/repo for remote SSH backups."
+        ),
     )
     enabled = models.BooleanField(default=True)
     timestamp = models.DateTimeField(default=timezone.now)
     passphrase = models.CharField(max_length=100, default=make_password)
     paperkey = models.TextField()
+
+    class Meta:
+        verbose_name = "Support service"
+        verbose_name_plural = "Support services"
 
     def __str__(self):
         return self.repository
@@ -159,10 +173,13 @@ class BackupService(models.Model):
 
     def ensure_init(self):
         if not self.paperkey:
-            log = initialize(self.repository, self.passphrase)
-            self.backuplog_set.create(event="init", log=log)
-            self.paperkey = get_paper_key(self.repository)
-            self.save()
+            try:
+                log = initialize(self.repository, self.passphrase)
+                self.backuplog_set.create(event="init", log=log)
+                self.paperkey = get_paper_key(self.repository)
+                self.save()
+            except BackupError as error:
+                self.backuplog_set.create(event="error", log=str(error))
 
     def backup(self):
         try:
@@ -193,5 +210,9 @@ class BackupLog(models.Model):
     )
     log = models.TextField()
 
+    class Meta:
+        verbose_name = "Backup log"
+        verbose_name_plural = "Backup logs"
+
     def __str__(self):
-        return "{}:{}".format(self.service, self.event)
+        return f"{self.service}:{self.event}"

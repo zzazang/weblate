@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -18,7 +18,7 @@
 #
 
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import HTML, Fieldset, Layout
+from crispy_forms.layout import HTML, Div, Field, Fieldset, Layout, Submit
 from django import forms
 from django.contrib.auth import authenticate, password_validation
 from django.contrib.auth.forms import SetPasswordForm as DjangoSetPasswordForm
@@ -27,6 +27,7 @@ from django.forms.widgets import EmailInput
 from django.middleware.csrf import rotate_token
 from django.utils.functional import cached_property
 from django.utils.html import escape
+from django.utils.translation import gettext
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext
 
@@ -36,33 +37,26 @@ from weblate.accounts.models import AuditLog, Profile
 from weblate.accounts.notifications import (
     NOTIFICATIONS,
     SCOPE_ADMIN,
+    SCOPE_ALL,
     SCOPE_CHOICES,
-    SCOPE_DEFAULT,
     SCOPE_PROJECT,
+    SCOPE_WATCHED,
 )
 from weblate.accounts.utils import (
+    adjust_session_expiry,
     cycle_session_keys,
     get_all_user_mails,
     invalidate_reset_codes,
 )
-from weblate.auth.models import User
+from weblate.auth.models import Group, User
 from weblate.lang.models import Language
 from weblate.logger import LOGGER
-from weblate.trans.defines import (
-    EMAIL_LENGTH,
-    FULLNAME_LENGTH,
-    PROJECT_NAME_LENGTH,
-    USERNAME_LENGTH,
-)
+from weblate.trans.defines import EMAIL_LENGTH, FULLNAME_LENGTH
 from weblate.trans.models import Component, Project
 from weblate.utils import messages
-from weblate.utils.forms import SortedSelect, SortedSelectMultiple
+from weblate.utils.forms import SortedSelect, SortedSelectMultiple, UsernameField
 from weblate.utils.ratelimit import check_rate_limit, reset_rate_limit
-from weblate.utils.validators import (
-    validate_email,
-    validate_fullname,
-    validate_username,
-)
+from weblate.utils.validators import validate_email, validate_fullname
 
 
 class UniqueEmailMixin:
@@ -73,7 +67,7 @@ class UniqueEmailMixin:
         self.cleaned_data["email_user"] = None
         mail = self.cleaned_data["email"]
         users = User.objects.filter(
-            Q(social_auth__verifiedemail__email__iexact=mail) | Q(email__iexact=mail),
+            Q(social_auth__verifiedemail__email__iexact=mail) | Q(email=mail),
             is_active=True,
         )
         if users.exists():
@@ -112,21 +106,7 @@ class EmailField(forms.CharField):
         super().__init__(*args, **kwargs)
 
 
-class UsernameField(forms.CharField):
-    default_validators = [validate_username]
-
-    def __init__(self, *args, **kwargs):
-        kwargs["max_length"] = USERNAME_LENGTH
-        kwargs["help_text"] = _(
-            "Username may only contain letters, "
-            "numbers or the following characters: @ . + - _"
-        )
-        kwargs["label"] = _("Username")
-        kwargs["required"] = True
-        self.valid = None
-
-        super().__init__(*args, **kwargs)
-
+class UniqueUsernameField(UsernameField):
     def clean(self, value):
         """Username validation, requires a unique name."""
         if value is None:
@@ -135,7 +115,7 @@ class UsernameField(forms.CharField):
             existing = User.objects.filter(username=value)
             if existing.exists() and value != self.valid:
                 raise forms.ValidationError(
-                    _("This username is already taken. " "Please choose another.")
+                    _("This username is already taken. Please choose another.")
                 )
 
         return super().clean(value)
@@ -158,8 +138,19 @@ class ProfileBaseForm(forms.ModelForm):
             return cls(request.POST, instance=request.user.profile)
         return cls(instance=request.user.profile)
 
+    def add_error(self, field, error):
+        if field is None and hasattr(error, "error_dict"):
+            # Skip errors from model clean method on unknown fields as
+            # this is partial form. This is really bound to how Profile.clean
+            # behaves.
+            ignored_fields = ("dashboard_component_list", "dashboard_view")
+            for field_name, _error_list in error.error_dict.items():
+                if field_name in ignored_fields and not hasattr(self, field_name):
+                    return
+        super().add_error(field, error)
 
-class ProfileForm(ProfileBaseForm):
+
+class LanguagesForm(ProfileBaseForm):
     """User profile editing."""
 
     class Meta:
@@ -182,12 +173,50 @@ class ProfileForm(ProfileBaseForm):
         self.helper.form_tag = False
 
 
+class ProfileForm(ProfileBaseForm):
+    """User profile editing."""
+
+    public_email = forms.ChoiceField(
+        label=_("Public e-mail"),
+        choices=(("", ""),),
+        required=False,
+    )
+
+    class Meta:
+        model = Profile
+        fields = (
+            "website",
+            "public_email",
+            "liberapay",
+            "codesite",
+            "github",
+            "fediverse",
+            "twitter",
+            "linkedin",
+            "location",
+            "company",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        emails = get_all_user_mails(self.instance.user)
+        emails.add("")
+
+        self.fields["public_email"].choices = [(x, x) for x in sorted(emails)]
+        self.helper = FormHelper(self)
+        self.helper.disable_csrf = True
+        self.helper.form_tag = False
+
+
 class SubscriptionForm(ProfileBaseForm):
     """User watched projects management."""
 
     class Meta:
         model = Profile
-        fields = ("watched",)
+        fields = (
+            "auto_watch",
+            "watched",
+        )
         widgets = {"watched": forms.SelectMultiple}
 
     def __init__(self, *args, **kwargs):
@@ -210,6 +239,7 @@ class UserSettingsForm(ProfileBaseForm):
             "hide_completed",
             "translate_mode",
             "zen_mode",
+            "nearby_strings",
             "secondary_in_zen",
             "hide_source_secondary",
             "editor_link",
@@ -218,6 +248,7 @@ class UserSettingsForm(ProfileBaseForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["special_chars"].strip = False
         self.helper = FormHelper(self)
         self.helper.disable_csrf = True
         self.helper.form_tag = False
@@ -229,19 +260,55 @@ class DashboardSettingsForm(ProfileBaseForm):
     class Meta:
         model = Profile
         fields = ("dashboard_view", "dashboard_component_list")
-        widgets = {"dashboard_view": forms.RadioSelect}
+        widgets = {
+            "dashboard_view": forms.RadioSelect,
+            "dashboard_component_list": forms.HiddenInput,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper(self)
         self.helper.disable_csrf = True
         self.helper.form_tag = False
+        component_lists = self.instance.allowed_dashboard_component_lists
+        self.fields["dashboard_component_list"].queryset = component_lists
+        choices = [
+            choice
+            for choice in self.fields["dashboard_view"].choices
+            if choice[0] != Profile.DASHBOARD_COMPONENT_LIST
+        ]
+        if not component_lists:
+            choices = [
+                choice
+                for choice in choices
+                if choice[0] != Profile.DASHBOARD_COMPONENT_LISTS
+            ]
+        for clist in component_lists:
+            choices.append((100 + clist.id, gettext("Component list: %s") % clist.name))
+        self.fields["dashboard_view"].choices = choices
+        if (
+            self.instance.dashboard_view == Profile.DASHBOARD_COMPONENT_LIST
+            and self.instance.dashboard_component_list
+        ):
+            self.initial["dashboard_view"] = (
+                100 + self.instance.dashboard_component_list_id
+            )
+
+    def clean(self):
+        view = self.cleaned_data.get("dashboard_view")
+        if view and view >= 100:
+            self.cleaned_data["dashboard_view"] = Profile.DASHBOARD_COMPONENT_LIST
+            view -= 100
+            for clist in self.instance.allowed_dashboard_component_lists:
+                if clist.id == view:
+                    self.cleaned_data["dashboard_component_list"] = clist
+                    break
 
 
 class UserForm(forms.ModelForm):
     """User information form."""
 
-    username = UsernameField()
+    username = UniqueUsernameField()
     email = forms.ChoiceField(
         label=_("E-mail"),
         help_text=_("You can add another e-mail address below."),
@@ -301,13 +368,6 @@ class ContactForm(forms.Form):
         max_length=2000,
         widget=forms.Textarea,
     )
-    content = forms.CharField(required=False)
-
-    def clean_content(self):
-        """Check if content is empty."""
-        if self.cleaned_data["content"] != "":
-            raise forms.ValidationError("Invalid value")
-        return ""
 
 
 class EmailForm(forms.Form, UniqueEmailMixin):
@@ -321,13 +381,6 @@ class EmailForm(forms.Form, UniqueEmailMixin):
         label=_("E-mail"),
         help_text=_("Activation e-mail will be sent here."),
     )
-    content = forms.CharField(required=False)
-
-    def clean_content(self):
-        """Check if content is empty."""
-        if self.cleaned_data["content"] != "":
-            raise forms.ValidationError("Invalid value")
-        return ""
 
 
 class RegistrationForm(EmailForm):
@@ -336,10 +389,9 @@ class RegistrationForm(EmailForm):
     required_css_class = "required"
     error_css_class = "error"
 
-    username = UsernameField()
+    username = UniqueUsernameField()
     # This has to be without underscore for social-auth
     fullname = FullNameField()
-    content = forms.CharField(required=False)
 
     def __init__(self, request=None, *args, **kwargs):
         # The 'request' parameter is set for custom auth use by subclasses.
@@ -347,16 +399,10 @@ class RegistrationForm(EmailForm):
         self.request = request
         super().__init__(*args, **kwargs)
 
-    def clean_content(self):
-        """Check if content is empty."""
-        if self.cleaned_data["content"] != "":
-            raise forms.ValidationError("Invalid value")
-        return ""
-
     def clean(self):
         if not check_rate_limit("registration", self.request):
             raise forms.ValidationError(
-                _("Too many failed registration attempts from this location!")
+                _("Too many failed registration attempts from this location.")
             )
         return self.cleaned_data
 
@@ -498,7 +544,7 @@ class LoginForm(forms.Form):
         if username and password:
             if not check_rate_limit("login", self.request):
                 raise forms.ValidationError(
-                    _("Too many authentication attempts from this location!")
+                    _("Too many authentication attempts from this location.")
                 )
             self.user_cache = authenticate(
                 self.request, username=username, password=password
@@ -524,59 +570,22 @@ class LoginForm(forms.Form):
             AuditLog.objects.create(
                 self.user_cache, self.request, "login", method="password", name=username
             )
+            adjust_session_expiry(self.request)
             reset_rate_limit("login", self.request)
         return self.cleaned_data
-
-    def get_user_id(self):
-        if self.user_cache:
-            return self.user_cache.id
-        return None
 
     def get_user(self):
         return self.user_cache
 
 
-class HostingForm(forms.Form):
-    """Form for asking for hosting."""
-
-    name = forms.CharField(
-        label=_("Your name"), required=True, max_length=FULLNAME_LENGTH
-    )
-    email = EmailField(label=_("Your e-mail"), required=True)
-    project = forms.CharField(
-        label=_("Project name"), required=True, max_length=PROJECT_NAME_LENGTH
-    )
-    url = forms.URLField(label=_("Project website"), required=True, max_length=200)
-    repo = forms.CharField(
-        label=_("Source code repository"),
-        help_text=_("URL of source code repository, for example Git or Mercurial."),
-        required=True,
-        max_length=200,
-    )
-    mask = forms.CharField(
-        label=_("Filemask"),
-        help_text=_(
-            "Path of files to translate, use * instead of language code, "
-            "for example: po/*.po or locale/*/LC_MESSAGES/django.po."
-        ),
-        required=True,
-        max_length=200,
-    )
-
-    message = forms.CharField(
-        label=_("Additional message"),
-        required=True,
-        widget=forms.Textarea,
-        max_length=1000,
-        help_text=_("Please describe the project and your relation to it."),
-    )
-    content = forms.CharField(required=False)
-
-    def clean_content(self):
-        """Check if content is empty."""
-        if self.cleaned_data["content"] != "":
-            raise forms.ValidationError("Invalid value")
-        return ""
+class AdminLoginForm(LoginForm):
+    def clean(self):
+        data = super().clean()
+        if self.user_cache and not self.user_cache.is_superuser:
+            raise forms.ValidationError(
+                self.error_messages["inactive"], code="inactive"
+            )
+        return data
 
 
 class NotificationForm(forms.Form):
@@ -596,9 +605,7 @@ class NotificationForm(forms.Form):
         self.is_active = is_active
         self.show_default = show_default
         self.fields["project"].queryset = user.allowed_projects
-        self.fields["component"].queryset = Component.objects.filter(
-            project_id__in=user.allowed_project_ids
-        )
+        self.fields["component"].queryset = Component.objects.filter_access(user)
         language_fields = []
         component_fields = []
         for field, notification_cls in self.notification_fields():
@@ -624,19 +631,19 @@ class NotificationForm(forms.Form):
             Fieldset(
                 _("Component wide notifications"),
                 HTML(escape(self.get_help_component())),
-                *component_fields
+                *component_fields,
             ),
             Fieldset(
                 _("Translation notifications"),
                 HTML(escape(self.get_help_translation())),
-                *language_fields
+                *language_fields,
             ),
         )
 
     @staticmethod
     def notification_fields():
         for notification_cls in NOTIFICATIONS:
-            yield ("notify-{}".format(notification_cls.get_name()), notification_cls)
+            yield (f"notify-{notification_cls.get_name()}", notification_cls)
 
     @staticmethod
     def get_initial(notification_cls, subscriptions, show_default):
@@ -659,7 +666,7 @@ class NotificationForm(forms.Form):
 
     @cached_property
     def form_scope(self):
-        return self.form_params.get("scope", SCOPE_DEFAULT)
+        return self.form_params.get("scope", SCOPE_WATCHED)
 
     @cached_property
     def form_project(self):
@@ -671,7 +678,9 @@ class NotificationForm(forms.Form):
 
     def get_name(self):
         scope = self.form_scope
-        if scope == SCOPE_DEFAULT:
+        if scope == SCOPE_ALL:
+            return _("Other projects")
+        if scope == SCOPE_WATCHED:
             return _("Watched projects")
         if scope == SCOPE_ADMIN:
             return _("Managed projects")
@@ -681,7 +690,12 @@ class NotificationForm(forms.Form):
 
     def get_help_component(self):
         scope = self.form_scope
-        if scope == SCOPE_DEFAULT:
+        if scope == SCOPE_ALL:
+            return _(
+                "You will receive a notification for every such event"
+                " in non-watched projects."
+            )
+        if scope == SCOPE_WATCHED:
             return _(
                 "You will receive a notification for every such event"
                 " in your watched projects."
@@ -701,7 +715,12 @@ class NotificationForm(forms.Form):
 
     def get_help_translation(self):
         scope = self.form_scope
-        if scope == SCOPE_DEFAULT:
+        if scope == SCOPE_ALL:
+            return _(
+                "You will only receive these notifications for your translated "
+                "languages in non-watched projects."
+            )
+        if scope == SCOPE_WATCHED:
             return _(
                 "You will only receive these notifications for your translated "
                 "languages in your watched projects."
@@ -738,7 +757,7 @@ class NotificationForm(forms.Form):
             subscription, created = self.user.subscription_set.get_or_create(
                 notification=notification_cls.get_name(),
                 defaults={"frequency": frequency},
-                **lookup
+                **lookup,
             )
             # Update old subscription
             if not created and subscription.frequency != frequency:
@@ -747,3 +766,65 @@ class NotificationForm(forms.Form):
             handled.add(subscription.pk)
         # Delete stale subscriptions
         self.user.subscription_set.filter(**lookup).exclude(pk__in=handled).delete()
+
+
+class UserSearchForm(forms.Form):
+    """User searching form."""
+
+    # pylint: disable=invalid-name
+    q = forms.CharField(required=False)
+    sort_by = forms.CharField(required=False, widget=forms.HiddenInput)
+
+    sort_choices = {
+        "username": _("Username"),
+        "full_name": _("Full name"),
+        "date_joined": _("Date joined"),
+        "profile__translated": _("Translations made"),
+        "profile__suggested": _("Suggestions made"),
+        "profile__commented": _("Comments made"),
+        "profile__uploaded": _("Screenshots uploaded"),
+    }
+    sort_values = set(sort_choices) | {f"-{val}" for val in sort_choices}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+            Div(
+                Field("q", template="snippets/user-query-field.html"),
+                Field("sort_by", template="snippets/user-sort-field.html"),
+                css_class="btn-toolbar",
+                role="toolbar",
+            ),
+        )
+
+    def clean_sort_by(self):
+        sort_by = self.cleaned_data.get("sort_by")
+        if sort_by:
+            if sort_by not in self.sort_values:
+                raise forms.ValidationError(_("Chosen sorting is not supported."))
+            return sort_by
+        return None
+
+
+class GroupAddForm(forms.Form):
+    add_group = forms.ModelChoiceField(
+        label=_("Add user to a group"), queryset=Group.objects.all(), required=True
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper(self)
+        self.helper.form_class = "form-inline"
+        self.helper.field_template = "bootstrap3/layout/inline_field.html"
+        self.helper.layout = Layout(
+            "add_group",
+            Submit("add_group_button", _("Add group")),
+        )
+
+
+class GroupRemoveForm(forms.Form):
+    remove_group = forms.ModelChoiceField(queryset=Group.objects.all(), required=True)

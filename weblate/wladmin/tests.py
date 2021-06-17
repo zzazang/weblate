@@ -1,5 +1,5 @@
 #
-# Copyright © 2012 - 2020 Michal Čihař <michal@cihar.com>
+# Copyright © 2012 - 2021 Michal Čihař <michal@cihar.com>
 #
 # This file is part of Weblate <https://weblate.org/>
 #
@@ -21,21 +21,25 @@ import json
 import os
 
 import responses
+import social_django.utils
 from django.conf import settings
 from django.core import mail
+from django.core.checks import Critical
 from django.core.serializers.json import DjangoJSONEncoder
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from weblate.auth.models import Group
+from weblate.trans.models import Announcement
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.tests.utils import get_test_file
-from weblate.trans.util import add_configuration_error, delete_configuration_error
 from weblate.utils.checks import check_data_writable
 from weblate.utils.unittest import tempdir_setting
+from weblate.wladmin.middleware import ManageMiddleware
 from weblate.wladmin.models import BackupService, ConfigurationError, SupportStatus
-from weblate.wladmin.tasks import configuration_health_check
+
+TEST_BACKENDS = ("weblate.accounts.auth.WeblateUserBackend",)
 
 
 class AdminTest(ViewTestCase):
@@ -112,16 +116,16 @@ class AdminTest(ViewTestCase):
         self.assertContains(response, "weblate.E005")
 
     def test_error(self):
-        add_configuration_error("Test error", "FOOOOOOOOOOOOOO")
+        ConfigurationError.objects.create(name="Test error", message="FOOOOOOOOOOOOOO")
         response = self.client.get(reverse("manage-performance"))
         self.assertContains(response, "FOOOOOOOOOOOOOO")
-        delete_configuration_error("Test error")
+        ConfigurationError.objects.filter(name="Test error").delete()
         response = self.client.get(reverse("manage-performance"))
         self.assertNotContains(response, "FOOOOOOOOOOOOOO")
 
     def test_report(self):
         response = self.client.get(reverse("manage-repos"))
-        self.assertContains(response, "On branch master")
+        self.assertContains(response, "On branch main")
 
     def test_create_project(self):
         response = self.client.get(reverse("admin:trans_project_add"))
@@ -150,14 +154,33 @@ class AdminTest(ViewTestCase):
             self.assertRedirects(response, url)
 
     def test_configuration_health_check(self):
-        add_configuration_error("TEST", "Message", True)
-        add_configuration_error("TEST2", "Message", True)
-        configuration_health_check(False)
-        self.assertEqual(ConfigurationError.objects.count(), 2)
-        delete_configuration_error("TEST2", True)
-        configuration_health_check(False)
-        self.assertEqual(ConfigurationError.objects.count(), 1)
-        configuration_health_check()
+        # Run checks internally
+        ManageMiddleware.configuration_health_check()
+        # List of triggered checks remotely
+        ManageMiddleware.configuration_health_check(
+            [
+                Critical(msg="Error", id="weblate.E001"),
+                Critical(msg="Test Error", id="weblate.E002"),
+            ]
+        )
+        all_errors = ConfigurationError.objects.all()
+        self.assertEqual(len(all_errors), 1)
+        self.assertEqual(all_errors[0].name, "weblate.E002")
+        self.assertEqual(all_errors[0].message, "Test Error")
+        # No triggered checks
+        ManageMiddleware.configuration_health_check([])
+        self.assertEqual(ConfigurationError.objects.count(), 0)
+
+    def test_post_announcenement(self):
+        response = self.client.get(reverse("manage-tools"))
+        self.assertContains(response, "announcement")
+        self.assertFalse(Announcement.objects.exists())
+        response = self.client.post(
+            reverse("manage-tools"),
+            {"message": "Test message", "category": "info"},
+            follow=True,
+        )
+        self.assertTrue(Announcement.objects.exists())
 
     def test_send_test_email(self, expected="Test e-mail sent"):
         response = self.client.get(reverse("manage-tools"))
@@ -178,11 +201,62 @@ class AdminTest(ViewTestCase):
                 "email": "noreply@example.com",
                 "username": "username",
                 "full_name": "name",
+                "send_email": 1,
             },
             follow=True,
         )
-        self.assertContains(response, "User has been invited")
+        self.assertContains(response, "Created user account")
         self.assertEqual(len(mail.outbox), 1)
+
+    def test_invite_user_nosend(self):
+        response = self.client.get(reverse("manage-users"))
+        self.assertContains(response, "E-mail")
+        response = self.client.post(
+            reverse("manage-users"),
+            {
+                "email": "noreply@example.com",
+                "username": "username",
+                "full_name": "name",
+            },
+            follow=True,
+        )
+        self.assertContains(response, "Created user account")
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(AUTHENTICATION_BACKENDS=TEST_BACKENDS)
+    def test_invite_user_nomail(self):
+        try:
+            # psa creates copy of settings...
+            orig_backends = social_django.utils.BACKENDS
+            social_django.utils.BACKENDS = TEST_BACKENDS
+
+            response = self.client.get(reverse("manage-users"))
+            self.assertContains(response, "E-mail")
+            response = self.client.post(
+                reverse("manage-users"),
+                {
+                    "email": "noreply@example.com",
+                    "username": "username",
+                    "full_name": "name",
+                    "send_email": 1,
+                },
+                follow=True,
+            )
+            self.assertContains(response, "Created user account")
+            self.assertEqual(len(mail.outbox), 1)
+        finally:
+            social_django.utils.BACKENDS = orig_backends
+
+    def test_check_user(self):
+        response = self.client.get(
+            reverse("manage-users-check"), {"email": self.user.email}, follow=True
+        )
+        self.assertRedirects(response, self.user.get_absolute_url())
+        self.assertContains(response, "Never signed-in")
+        response = self.client.get(
+            reverse("manage-users-check"), {"email": "nonexisting"}, follow=True
+        )
+        self.assertRedirects(response, reverse("manage-users") + "?q=nonexisting")
 
     @override_settings(
         EMAIL_HOST="nonexisting.weblate.org",
@@ -211,6 +285,12 @@ class AdminTest(ViewTestCase):
         self.assertEqual(status.name, "community")
         self.assertFalse(BackupService.objects.exists())
 
+        self.assertFalse(status.discoverable)
+
+        self.client.post(reverse("manage-discovery"))
+        status = SupportStatus.objects.get()
+        self.assertTrue(status.discoverable)
+
     @responses.activate
     def test_activation_hosted(self):
         responses.add(
@@ -232,6 +312,12 @@ class AdminTest(ViewTestCase):
         backup = BackupService.objects.get()
         self.assertEqual(backup.repository, "/tmp/xxx")
         self.assertFalse(backup.enabled)
+
+        self.assertFalse(status.discoverable)
+
+        self.client.post(reverse("manage-discovery"))
+        status = SupportStatus.objects.get()
+        self.assertTrue(status.discoverable)
 
     def test_group_management(self):
         # Add form
